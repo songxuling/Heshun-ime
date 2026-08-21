@@ -3,6 +3,8 @@
 #include <shlwapi.h>
 #include <string>
 #include <cstring>
+#include <fstream>
+#include <filesystem>
 #include <vector>
 
 #include "guids.h"
@@ -78,11 +80,18 @@ std::string ModuleDirectory() {
     const auto slash = directory.find_last_of(L"\\/");
     if (slash == std::wstring::npos) return {};
     directory.resize(slash);
-    const int bytes = WideCharToMultiByte(CP_UTF8, 0, directory.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    const int bytes = WideCharToMultiByte(CP_UTF8, 0, directory.data(), static_cast<int>(directory.size()), nullptr, 0, nullptr, nullptr);
     if (!bytes) return {};
-    std::string result(static_cast<size_t>(bytes - 1), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, directory.c_str(), -1, result.data(), bytes, nullptr, nullptr);
+    std::string result(static_cast<size_t>(bytes), '\0');
+    if (!WideCharToMultiByte(CP_UTF8, 0, directory.data(), static_cast<int>(directory.size()), result.data(), bytes, nullptr, nullptr)) return {};
     return result;
+}
+
+void Trace(const std::string& message) {
+    const std::string directory = ModuleDirectory();
+    if (directory.empty()) return;
+    std::ofstream log(std::filesystem::u8path(directory + "\\heshun-tsf.log"), std::ios::app);
+    if (log) log << message << '\n';
 }
 
 } // namespace
@@ -119,12 +128,13 @@ STDMETHODIMP HeshunTextService::Activate(ITfThreadMgr* thread_mgr, TfClientId cl
 }
 
 STDMETHODIMP HeshunTextService::ActivateEx(ITfThreadMgr* thread_mgr, TfClientId client_id, DWORD) {
-    if (!thread_mgr) return E_INVALIDARG;
-    if (thread_mgr_) return S_FALSE;
+    if (!thread_mgr) { Trace("ActivateEx: missing thread manager"); return E_INVALIDARG; }
+    if (thread_mgr_) { Trace("ActivateEx: already active"); return S_FALSE; }
     thread_mgr_ = thread_mgr;
     thread_mgr_->AddRef();
     client_id_ = client_id;
-    if (!LoadEngine()) { Deactivate(); return E_FAIL; }
+    if (!LoadEngine()) { Trace("ActivateEx: heshun engine/schema load failed"); Deactivate(); return E_FAIL; }
+    Trace("ActivateEx: engine loaded");
 
     ITfKeystrokeMgr* keystrokes = nullptr;
     HRESULT hr = thread_mgr_->QueryInterface(IID_PPV_ARGS(&keystrokes));
@@ -132,7 +142,8 @@ STDMETHODIMP HeshunTextService::ActivateEx(ITfThreadMgr* thread_mgr, TfClientId 
         hr = keystrokes->AdviseKeyEventSink(client_id_, static_cast<ITfKeyEventSink*>(this), TRUE);
         keystrokes->Release();
     }
-    if (FAILED(hr)) { Deactivate(); }
+    if (FAILED(hr)) { Trace("ActivateEx: AdviseKeyEventSink failed"); Deactivate(); }
+    else Trace("ActivateEx: key sink advised");
     return hr;
 }
 
@@ -153,11 +164,13 @@ STDMETHODIMP HeshunTextService::Deactivate() {
 
 bool HeshunTextService::LoadEngine() {
     const std::string directory = ModuleDirectory();
-    if (directory.empty()) return false;
+    if (directory.empty()) { Trace("LoadEngine: module directory unavailable"); return false; }
     const std::string schema = directory + "\\schemas\\zhengma66.schema.yaml";
+    Trace("LoadEngine schema: " + schema);
     engine_ = hs_engine_load_schema(schema.c_str());
-    if (!engine_) return false;
+    if (!engine_) { Trace("LoadEngine: hs_engine_load_schema returned null"); return false; }
     session_ = hs_session_new(engine_);
+    if (!session_) Trace("LoadEngine: hs_session_new returned null");
     return session_ != nullptr;
 }
 
