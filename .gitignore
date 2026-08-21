@@ -1,3 +1,6 @@
+# CMake build output
+/build-tsf/
+
 # Rust build output
 /target/
 **/target/
