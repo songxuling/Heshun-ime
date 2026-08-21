@@ -1,0 +1,27 @@
+[package]
+name = "heshun"
+version = "0.2.0"
+edition = "2021"
+description = "通用中文输入法引擎核心：形码(郑码) + 音码(全拼/自然码双拼)，全平台共享"
+
+[lib]
+name = "heshun"
+crate-type = ["lib", "staticlib", "cdylib"]
+
+[[bin]]
+name = "hs-build"
+path = "src/bin/build.rs"
+
+[[bin]]
+name = "hs-demo"
+path = "src/bin/demo.rs"
+
+[[bin]]
+name = "hs-bench"
+path = "src/bin/bench.rs"
+
+[dependencies]
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"

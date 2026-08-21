@@ -1,0 +1,28 @@
+# zhengma66.schema.yaml — 郑码 6.6 形码方案
+schema:
+  schema_id: zhengma66
+  name: 郑码6.6
+  version: "6.6"
+
+engine:
+  type: table
+
+dictionary:
+  file: zhengma.bin
+  source: 郑码6.6.txt
+
+speller:
+  max_code_length: 4
+  auto_select: true
+  auto_select_pattern: "^[a-z]{4}$"
+
+reverse_lookup:
+  dictionary: pinyin_simp
+  file: pinyin_simp.bin
+  prefix: "`"
+
+punctuator:
+  full_shape: true
+
+user_dict:
+  file: ../data/zhengma66.userdb.json

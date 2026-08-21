@@ -1,0 +1,10 @@
+[package]
+name = "heshun-gui"
+version = "0.1.0"
+edition = "2021"
+description = "heshun 输入法引擎跨平台 GUI demo"
+
+[dependencies]
+heshun = { path = "../heshun" }
+eframe = "0.30"
+egui = "0.30"

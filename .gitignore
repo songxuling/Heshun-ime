@@ -1,0 +1,26 @@
+# Rust build output
+/target/
+**/target/
+
+# GUI runtime/generated data
+/data/
+/dist/
+**/*.userdb.json
+
+# Local IDE / OS files
+/.idea/
+/.vscode/
+*.swp
+*.suo
+*.user
+Thumbs.db
+Desktop.ini
+
+# Do not commit built dynamic/static libraries or executables
+*.dll
+*.lib
+*.a
+*.exe
+
+# Source-controlled binary dictionaries are intentionally exempt.
+!heshun/schemas/*.bin

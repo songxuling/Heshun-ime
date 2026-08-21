@@ -1,0 +1,11 @@
+[workspace]
+members = ["heshun", "heshun-gui"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/songxuling/Heshun-ime"
+
+[profile.release]
+lto = true
