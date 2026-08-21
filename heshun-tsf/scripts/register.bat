@@ -1,8 +1,17 @@
 @echo off
-setlocal
+setlocal EnableExtensions
 
-set "DLL=%~1"
-if "%DLL%"=="" set "DLL=%~dp0..\..\build-tsf\bin\heshun_tsf.dll"
+rem TSF language profile registration writes protected CTF configuration.
+rem Re-launch through UAC when this batch was started without elevation.
+net session >nul 2>&1
+if not "%errorlevel%"=="0" (
+  echo Requesting Administrator permission for TSF registration...
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%ComSpec%' -Verb RunAs -WorkingDirectory '%CD%' -ArgumentList '/c','""%~f0"" %*'"
+  exit /b %errorlevel%
+)
+
+set "DLL=%~f1"
+if "%~1"=="" set "DLL=%~dp0..\..\build-tsf\bin\heshun_tsf.dll"
 set "TOOL=%~dp0..\..\build-tsf\bin\heshun_tsf_profile.exe"
 
 if not exist "%DLL%" (

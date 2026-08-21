@@ -29,7 +29,7 @@ The build copies `heshun.dll` and `heshun/schemas/` beside `heshun_tsf.dll`.
 
 ## Register / unregister
 
-Run from an elevated **x64 Native Tools Command Prompt for VS 2022**:
+Run either script from an x64 Native Tools Command Prompt for VS 2022. It requests UAC elevation automatically when required:
 
 ```bat
 scripts\register.bat build-tsf\bin\heshun_tsf.dll
