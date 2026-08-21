@@ -1,27 +1,38 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 
-rem Resolve the DLL while still in the caller's working directory. The UAC child
-rem starts from System32 on some systems, so it must receive an absolute path.
+set "LOG=%TEMP%\heshun-tsf-register.log"
+if /i "%~1"=="--elevated" goto elevated
+
+rem Resolve the DLL before UAC. The child consumes HESHUN_TSF_DLL rather than
+rem parsing a relative command line from C:\Windows\System32.
 set "DLL=%~f1"
 if "%~1"=="" set "DLL=%~dp0..\..\build-tsf\bin\heshun_tsf.dll"
 for %%I in ("%DLL%") do set "DLL=%%~fI"
-set "LOG=%TEMP%\heshun-tsf-register.log"
-
-rem TSF profile registration writes protected CTF configuration.
-net session >nul 2>&1
-if not "!errorlevel!"=="0" (
-  echo Requesting Administrator permission for TSF registration...
-  echo The elevated installer log will be saved to: %LOG%
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "$p = Start-Process -FilePath $env:ComSpec -Verb RunAs -Wait -PassThru -ArgumentList '/d /c """"%~f0"" --elevated ""%DLL%"" ^> ""%LOG%"" 2^>^&1""'; exit $p.ExitCode"
-  set "RC=!errorlevel!"
-  echo.
-  echo Elevated installer finished with exit code !RC!.
-  if exist "%LOG%" type "%LOG%"
-  exit /b !RC!
+if not exist "%DLL%" (
+  echo DLL not found: %DLL%
+  exit /b 1
 )
 
-if /i "%~1"=="--elevated" set "DLL=%~f2"
+net session >nul 2>&1
+if "!errorlevel!"=="0" goto elevated
+
+echo Requesting Administrator permission for TSF registration...
+echo The elevated installer log will be saved to: %LOG%
+set "HESHUN_TSF_DLL=%DLL%"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0elevate-tsf.ps1" "%~f0" "%LOG%"
+set "RC=!errorlevel!"
+echo.
+echo Elevated installer finished with exit code !RC!.
+if exist "%LOG%" type "%LOG%"
+exit /b !RC!
+
+:elevated
+set "DLL=%HESHUN_TSF_DLL%"
+if "%DLL%"=="" (
+  echo Missing absolute DLL path from elevation parent.
+  exit /b 1
+)
 set "TOOL=%~dp0..\..\build-tsf\bin\heshun_tsf_profile.exe"
 
 echo [heshun-tsf] Running elevated registration.

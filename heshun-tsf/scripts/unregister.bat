@@ -1,24 +1,32 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 
+set "LOG=%TEMP%\heshun-tsf-unregister.log"
+if /i "%~1"=="--elevated" goto elevated
+
 set "DLL=%~f1"
 if "%~1"=="" set "DLL=%~dp0..\..\build-tsf\bin\heshun_tsf.dll"
 for %%I in ("%DLL%") do set "DLL=%%~fI"
-set "LOG=%TEMP%\heshun-tsf-unregister.log"
 
 net session >nul 2>&1
-if not "!errorlevel!"=="0" (
-  echo Requesting Administrator permission for TSF removal...
-  echo The elevated removal log will be saved to: %LOG%
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "$p = Start-Process -FilePath $env:ComSpec -Verb RunAs -Wait -PassThru -ArgumentList '/d /c """"%~f0"" --elevated ""%DLL%"" ^> ""%LOG%"" 2^>^&1""'; exit $p.ExitCode"
-  set "RC=!errorlevel!"
-  echo.
-  echo Elevated removal finished with exit code !RC!.
-  if exist "%LOG%" type "%LOG%"
-  exit /b !RC!
-)
+if "!errorlevel!"=="0" goto elevated
 
-if /i "%~1"=="--elevated" set "DLL=%~f2"
+echo Requesting Administrator permission for TSF removal...
+echo The elevated removal log will be saved to: %LOG%
+set "HESHUN_TSF_DLL=%DLL%"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0elevate-tsf.ps1" "%~f0" "%LOG%"
+set "RC=!errorlevel!"
+echo.
+echo Elevated removal finished with exit code !RC!.
+if exist "%LOG%" type "%LOG%"
+exit /b !RC!
+
+:elevated
+set "DLL=%HESHUN_TSF_DLL%"
+if "%DLL%"=="" (
+  echo Missing absolute DLL path from elevation parent.
+  exit /b 1
+)
 set "TOOL=%~dp0..\..\build-tsf\bin\heshun_tsf_profile.exe"
 
 echo [heshun-tsf] Running elevated removal.
