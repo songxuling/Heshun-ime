@@ -2,7 +2,9 @@
 
 #include <windows.h>
 #include <msctf.h>
+#include <memory>
 #include "heshun.h"
+#include "candidate_window.h"
 
 class HeshunTextService final : public ITfTextInputProcessorEx, public ITfKeyEventSink {
 public:
@@ -36,6 +38,7 @@ private:
     bool IsHandledKey(WPARAM key) const;
     bool FeedKey(WPARAM key, char** committed);
     HRESULT CommitText(ITfContext* context, const char* utf8);
+    void UpdateCandidateWindow();
     void SaveUserDictionary();
 
     volatile LONG ref_count_ = 1;
@@ -44,6 +47,7 @@ private:
     DWORD key_sink_cookie_ = TF_INVALID_COOKIE;
     hs_handle* engine_ = nullptr;
     hs_handle* session_ = nullptr;
+    std::unique_ptr<CandidateWindow> candidate_window_;
 };
 
 HRESULT CreateHeshunTextService(REFIID riid, void** object);

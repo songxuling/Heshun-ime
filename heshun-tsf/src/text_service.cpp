@@ -79,6 +79,26 @@ std::wstring Utf8ToUtf16(const char* value) {
     return result;
 }
 
+std::vector<std::wstring> ParseCandidateWords(const char* value) {
+    std::vector<std::wstring> result;
+    if (!value) return result;
+    std::string encoded(value);
+    size_t begin = 0;
+    while (begin <= encoded.size()) {
+        const size_t end = encoded.find('\x02', begin);
+        const std::string entry = encoded.substr(begin, end == std::string::npos ? std::string::npos : end - begin);
+        const size_t separator = entry.find('\x01');
+        const std::string word = entry.substr(0, separator);
+        const std::string code = separator == std::string::npos ? "" : entry.substr(separator + 1);
+        std::wstring display = Utf8ToUtf16(word.c_str());
+        if (!code.empty()) display += L"  [" + Utf8ToUtf16(code.c_str()) + L"]";
+        if (!display.empty()) result.push_back(std::move(display));
+        if (end == std::string::npos) break;
+        begin = end + 1;
+    }
+    return result;
+}
+
 std::string ModuleDirectory() {
     std::vector<wchar_t> path(MAX_PATH);
     DWORD length = 0;
@@ -202,8 +222,28 @@ void HeshunTextService::SaveUserDictionary() {
 }
 
 void HeshunTextService::FreeEngine() {
+    if (candidate_window_) candidate_window_->Hide();
     if (session_) { hs_session_free(session_); session_ = nullptr; }
     if (engine_) { hs_engine_free(engine_); engine_ = nullptr; }
+}
+
+void HeshunTextService::UpdateCandidateWindow() {
+    if (!session_) return;
+    char* pending_raw = hs_pending(session_);
+    char* candidates_raw = hs_candidates(session_, 9);
+    std::wstring pending = pending_raw ? Utf8ToUtf16(pending_raw) : L"";
+    std::vector<std::wstring> candidates = ParseCandidateWords(candidates_raw);
+    if (pending_raw) hs_str_free(pending_raw);
+    if (candidates_raw) hs_str_free(candidates_raw);
+
+    if (pending.empty() || candidates.empty()) {
+        if (candidate_window_) candidate_window_->Hide();
+        Trace("CandidateWindow: hidden");
+        return;
+    }
+    if (!candidate_window_) candidate_window_ = std::make_unique<CandidateWindow>();
+    candidate_window_->Show(std::move(pending), std::move(candidates));
+    Trace("CandidateWindow: shown");
 }
 
 bool HeshunTextService::IsHandledKey(WPARAM key) const {
@@ -241,7 +281,9 @@ STDMETHODIMP HeshunTextService::OnKeyDown(ITfContext* context, WPARAM wparam, LP
     char* committed = nullptr;
     if (!FeedKey(wparam, &committed)) { Trace("OnKeyDown: engine rejected key"); return S_OK; }
     *eaten = TRUE;
+    UpdateCandidateWindow();
     if (committed) {
+        if (candidate_window_) candidate_window_->Hide();
         Trace("OnKeyDown: committing engine result");
         const HRESULT hr = CommitText(context, committed);
         hs_str_free(committed);
