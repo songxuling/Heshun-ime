@@ -40,7 +40,23 @@ HRESULT Register(const wchar_t* dll_path) {
                                              GUID_PROFILE_HESHUN_ZHENGMA, TRUE);
         if (FAILED(hr)) std::wcerr << L"EnableLanguageProfile failed: 0x" << std::hex << static_cast<unsigned long>(hr) << L"\n";
     }
+    if (SUCCEEDED(hr)) {
+        hr = profiles->ActivateLanguageProfile(CLSID_HeshunTextService, kHeshunLangId,
+                                               GUID_PROFILE_HESHUN_ZHENGMA);
+        if (FAILED(hr)) std::wcerr << L"ActivateLanguageProfile failed: 0x" << std::hex << static_cast<unsigned long>(hr) << L"\n";
+    }
     profiles->Release();
+    return hr;
+}
+
+HRESULT Activate() {
+    ITfInputProcessorProfiles* profiles = nullptr;
+    HRESULT hr = GetProfiles(&profiles);
+    if (FAILED(hr)) { std::wcerr << L"Create profiles failed: 0x" << std::hex << static_cast<unsigned long>(hr) << L"\n"; return hr; }
+    hr = profiles->ActivateLanguageProfile(CLSID_HeshunTextService, kHeshunLangId,
+                                           GUID_PROFILE_HESHUN_ZHENGMA);
+    profiles->Release();
+    if (FAILED(hr)) std::wcerr << L"ActivateLanguageProfile failed: 0x" << std::hex << static_cast<unsigned long>(hr) << L"\n";
     return hr;
 }
 
@@ -63,13 +79,14 @@ HRESULT Unregister() {
 
 int wmain(int argc, wchar_t** argv) {
     if (argc < 2 || (wcscmp(argv[1], L"register") == 0 && argc != 3) ||
-        (wcscmp(argv[1], L"unregister") != 0 && wcscmp(argv[1], L"register") != 0)) {
-        std::wcerr << L"Usage: heshun_tsf_profile register <heshun_tsf.dll> | unregister\n";
+        (wcscmp(argv[1], L"unregister") != 0 && wcscmp(argv[1], L"register") != 0 && wcscmp(argv[1], L"activate") != 0)) {
+        std::wcerr << L"Usage: heshun_tsf_profile register <heshun_tsf.dll> | activate | unregister\n";
         return 2;
     }
     const HRESULT init = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     if (FAILED(init) && init != RPC_E_CHANGED_MODE) return static_cast<int>(init);
-    const HRESULT hr = wcscmp(argv[1], L"register") == 0 ? Register(argv[2]) : Unregister();
+    const HRESULT hr = wcscmp(argv[1], L"register") == 0 ? Register(argv[2]) :
+                       wcscmp(argv[1], L"activate") == 0 ? Activate() : Unregister();
     if (SUCCEEDED(init)) CoUninitialize();
     if (FAILED(hr)) {
         std::wcerr << L"TSF profile operation failed: 0x" << std::hex << static_cast<unsigned long>(hr) << L"\n";

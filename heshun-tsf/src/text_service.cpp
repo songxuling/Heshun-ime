@@ -15,6 +15,8 @@ extern volatile LONG g_object_count;
 
 namespace {
 
+void Trace(const std::string& message);
+
 class CommitEditSession final : public ITfEditSession {
 public:
     CommitEditSession(ITfContext* context, std::wstring text) : context_(context), text_(std::move(text)) {
@@ -40,14 +42,16 @@ public:
     }
 
     STDMETHODIMP DoEditSession(TfEditCookie ec) override {
+        Trace("CommitEditSession: begin");
         ITfInsertAtSelection* insert = nullptr;
         HRESULT hr = context_->QueryInterface(IID_PPV_ARGS(&insert));
-        if (FAILED(hr)) return hr;
-        ITfRange* inserted = nullptr;
+        if (FAILED(hr)) { Trace("CommitEditSession: ITfInsertAtSelection unavailable"); return hr; }
+        // TF_IAS_NOQUERY promises that no inserted range is requested; pass nullptr
+        // rather than a range output pointer, as required by TSF for this flag.
         hr = insert->InsertTextAtSelection(ec, TF_IAS_NOQUERY, text_.c_str(),
-                                            static_cast<LONG>(text_.size()), &inserted);
-        if (inserted) inserted->Release();
+                                            static_cast<LONG>(text_.size()), nullptr);
         insert->Release();
+        Trace(FAILED(hr) ? "CommitEditSession: insert failed" : "CommitEditSession: insert succeeded");
         return hr;
     }
 
@@ -211,6 +215,7 @@ STDMETHODIMP HeshunTextService::OnSetFocus(BOOL) { return S_OK; }
 STDMETHODIMP HeshunTextService::OnTestKeyDown(ITfContext*, WPARAM wparam, LPARAM, BOOL* eaten) {
     if (!eaten) return E_INVALIDARG;
     *eaten = IsHandledKey(wparam) ? TRUE : FALSE;
+    if (*eaten) Trace("OnTestKeyDown: handled");
     return S_OK;
 }
 
@@ -218,14 +223,18 @@ STDMETHODIMP HeshunTextService::OnKeyDown(ITfContext* context, WPARAM wparam, LP
     if (!eaten) return E_INVALIDARG;
     *eaten = FALSE;
     if (!IsHandledKey(wparam)) return S_OK;
+    Trace("OnKeyDown: handled");
     char* committed = nullptr;
-    if (!FeedKey(wparam, &committed)) return S_OK;
+    if (!FeedKey(wparam, &committed)) { Trace("OnKeyDown: engine rejected key"); return S_OK; }
     *eaten = TRUE;
     if (committed) {
+        Trace("OnKeyDown: committing engine result");
         const HRESULT hr = CommitText(context, committed);
         hs_str_free(committed);
+        Trace(FAILED(hr) ? "OnKeyDown: CommitText failed" : "OnKeyDown: CommitText succeeded");
         return hr;
     }
+    Trace("OnKeyDown: awaiting more input");
     return S_OK;
 }
 
@@ -252,8 +261,11 @@ HRESULT HeshunTextService::CommitText(ITfContext* context, const char* utf8) {
     auto* edit = new (std::nothrow) CommitEditSession(context, std::move(text));
     if (!edit) return E_OUTOFMEMORY;
     HRESULT session_hr = E_FAIL;
+    Trace("CommitText: requesting synchronous edit session");
     const HRESULT hr = context->RequestEditSession(client_id_, edit, TF_ES_SYNC | TF_ES_READWRITE, &session_hr);
     edit->Release();
+    Trace(FAILED(hr) ? "CommitText: RequestEditSession failed" :
+          FAILED(session_hr) ? "CommitText: edit session failed" : "CommitText: complete");
     return FAILED(hr) ? hr : session_hr;
 }
 

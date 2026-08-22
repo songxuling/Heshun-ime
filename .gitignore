@@ -1,6 +1,7 @@
 # CMake build output
 /build-tsf/
 /build-tsf-next/
+/build-tsf-input-debug/
 
 # Rust build output
 /target/
