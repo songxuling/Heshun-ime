@@ -5,6 +5,8 @@
 #include <cstring>
 #include <fstream>
 #include <filesystem>
+#include <sstream>
+#include <iomanip>
 #include <vector>
 
 #include "guids.h"
@@ -16,6 +18,7 @@ extern volatile LONG g_object_count;
 namespace {
 
 void Trace(const std::string& message);
+std::string Hr(HRESULT hr);
 
 class CommitEditSession final : public ITfEditSession {
 public:
@@ -45,13 +48,13 @@ public:
         Trace("CommitEditSession: begin");
         ITfInsertAtSelection* insert = nullptr;
         HRESULT hr = context_->QueryInterface(IID_PPV_ARGS(&insert));
-        if (FAILED(hr)) { Trace("CommitEditSession: ITfInsertAtSelection unavailable"); return hr; }
+        if (FAILED(hr)) { Trace("CommitEditSession: ITfInsertAtSelection unavailable " + Hr(hr)); return hr; }
         // TF_IAS_NOQUERY promises that no inserted range is requested; pass nullptr
         // rather than a range output pointer, as required by TSF for this flag.
         hr = insert->InsertTextAtSelection(ec, TF_IAS_NOQUERY, text_.c_str(),
                                             static_cast<LONG>(text_.size()), nullptr);
         insert->Release();
-        Trace(FAILED(hr) ? "CommitEditSession: insert failed" : "CommitEditSession: insert succeeded");
+        Trace(FAILED(hr) ? "CommitEditSession: insert failed " + Hr(hr) : "CommitEditSession: insert succeeded");
         return hr;
     }
 
@@ -96,6 +99,12 @@ void Trace(const std::string& message) {
     if (directory.empty()) return;
     std::ofstream log(std::filesystem::u8path(directory + "\\heshun-tsf.log"), std::ios::app);
     if (log) log << message << '\n';
+}
+
+std::string Hr(HRESULT hr) {
+    std::ostringstream out;
+    out << "0x" << std::uppercase << std::hex << static_cast<unsigned long>(hr);
+    return out.str();
 }
 
 } // namespace
@@ -260,13 +269,16 @@ HRESULT HeshunTextService::CommitText(ITfContext* context, const char* utf8) {
     if (text.empty()) return S_OK;
     auto* edit = new (std::nothrow) CommitEditSession(context, std::move(text));
     if (!edit) return E_OUTOFMEMORY;
+    // A key callback runs while TSF may hold the document lock. Use an
+    // asynchronous edit session instead of synchronously re-entering the host.
     HRESULT session_hr = E_FAIL;
-    Trace("CommitText: requesting synchronous edit session");
-    const HRESULT hr = context->RequestEditSession(client_id_, edit, TF_ES_SYNC | TF_ES_READWRITE, &session_hr);
+    Trace("CommitText: requesting asynchronous edit session");
+    const HRESULT hr = context->RequestEditSession(client_id_, edit, TF_ES_ASYNC | TF_ES_READWRITE, &session_hr);
     edit->Release();
-    Trace(FAILED(hr) ? "CommitText: RequestEditSession failed" :
-          FAILED(session_hr) ? "CommitText: edit session failed" : "CommitText: complete");
-    return FAILED(hr) ? hr : session_hr;
+    Trace(FAILED(hr) ? "CommitText: RequestEditSession failed " + Hr(hr) :
+          session_hr == TF_S_ASYNC ? "CommitText: edit session queued" :
+          FAILED(session_hr) ? "CommitText: edit session failed " + Hr(session_hr) : "CommitText: complete");
+    return FAILED(hr) ? hr : S_OK;
 }
 
 HRESULT CreateHeshunTextService(REFIID riid, void** object) {
