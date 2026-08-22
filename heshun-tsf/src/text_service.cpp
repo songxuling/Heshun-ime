@@ -246,11 +246,20 @@ void HeshunTextService::UpdateCandidateWindow() {
     Trace("CandidateWindow: shown");
 }
 
+bool HeshunTextService::HasPending() const {
+    if (!session_) return false;
+    char* pending = hs_pending(session_);
+    const bool has_pending = pending && *pending;
+    if (pending) hs_str_free(pending);
+    return has_pending;
+}
+
 bool HeshunTextService::IsHandledKey(WPARAM key) const {
-        if (key >= 'A' && key <= 'Z') return true;
-        if (key >= 'a' && key <= 'z') return true;
-        if (key == VK_BACK || key == VK_ESCAPE || key == VK_SPACE) return true;
-        return key >= '1' && key <= '9';
+    if (key >= 'A' && key <= 'Z') return true;
+    if (key >= 'a' && key <= 'z') return true;
+    if (key == VK_BACK) return HasPending();
+    if (key == VK_ESCAPE || key == VK_SPACE) return true;
+    return key >= '1' && key <= '9';
 }
 
 bool HeshunTextService::FeedKey(WPARAM key, char** committed) {

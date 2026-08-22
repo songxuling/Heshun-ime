@@ -5,6 +5,7 @@
 /build-tsf-async-debug/
 /build-tsf-selection-debug/
 /build-tsf-candidates-debug/
+/build-tsf-backspace-debug/
 
 # Rust build output
 /target/

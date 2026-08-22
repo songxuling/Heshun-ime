@@ -35,6 +35,7 @@ private:
 
     bool LoadEngine();
     void FreeEngine();
+    bool HasPending() const;
     bool IsHandledKey(WPARAM key) const;
     bool FeedKey(WPARAM key, char** committed);
     HRESULT CommitText(ITfContext* context, const char* utf8);
