@@ -2,10 +2,11 @@
 setlocal EnableExtensions EnableDelayedExpansion
 
 set "LOG=%TEMP%\heshun-tsf-register.log"
+set "HANDOFF=%TEMP%\heshun-tsf-dll-path.txt"
 if /i "%~1"=="--elevated" goto elevated
 
-rem Resolve the DLL before UAC. The child consumes HESHUN_TSF_DLL rather than
-rem parsing a relative command line from C:\Windows\System32.
+rem Resolve the DLL before UAC. The elevated child reads this handoff file,
+rem because UAC does not preserve newly-set process environment variables.
 set "DLL=%~f1"
 if "%~1"=="" set "DLL=%~dp0..\..\build-tsf\bin\heshun_tsf.dll"
 for %%I in ("%DLL%") do set "DLL=%%~fI"
@@ -13,24 +14,25 @@ if not exist "%DLL%" (
   echo DLL not found: %DLL%
   exit /b 1
 )
+>"%HANDOFF%" echo %DLL%
 
 net session >nul 2>&1
 if "!errorlevel!"=="0" goto elevated
 
 echo Requesting Administrator permission for TSF registration...
 echo The elevated installer log will be saved to: %LOG%
-set "HESHUN_TSF_DLL=%DLL%"
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0elevate-tsf.ps1" "%~f0" "%LOG%"
 set "RC=!errorlevel!"
 echo.
 echo Elevated installer finished with exit code !RC!.
 if exist "%LOG%" type "%LOG%"
+del /q "%HANDOFF%" >nul 2>&1
 exit /b !RC!
 
 :elevated
-set "DLL=%HESHUN_TSF_DLL%"
+set /p "DLL="<"%HANDOFF%"
 if "%DLL%"=="" (
-  echo Missing absolute DLL path from elevation parent.
+  echo Missing absolute DLL path handoff from elevation parent.
   exit /b 1
 )
 set "TOOL=%~dp0..\..\build-tsf\bin\heshun_tsf_profile.exe"
