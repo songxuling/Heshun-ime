@@ -8,6 +8,9 @@ constexpr wchar_t kClassName[] = L"HeshunTsfCandidateWindow";
 constexpr COLORREF kBackground = RGB(255, 255, 255);
 constexpr COLORREF kBorder = RGB(190, 190, 190);
 constexpr COLORREF kText = RGB(30, 30, 30);
+constexpr int kHeaderHeight = 28;
+constexpr int kRowHeight = 25;
+constexpr int kPadding = 8;
 
 HFONT MakeFont(int points) {
     HDC dc = GetDC(nullptr);
@@ -53,17 +56,19 @@ void CandidateWindow::Show(std::wstring pending, std::vector<std::wstring> candi
         return;
     }
 
+    const int rows = static_cast<int>(std::min<size_t>(9, candidates_.size()));
+    const int height = kHeaderHeight + rows * kRowHeight + kPadding * 2;
     // Keep the window near the foreground caret without activating it.
     GUITHREADINFO info{sizeof(info)};
     HWND foreground = GetForegroundWindow();
     if (foreground && GetGUIThreadInfo(GetWindowThreadProcessId(foreground, nullptr), &info) && info.rcCaret.right > info.rcCaret.left) {
         POINT point{info.rcCaret.left, info.rcCaret.bottom};
         ClientToScreen(info.hwndCaret ? info.hwndCaret : foreground, &point);
-        SetWindowPos(window_, HWND_TOPMOST, point.x, point.y + 4, 0, 0,
-                     SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        SetWindowPos(window_, HWND_TOPMOST, point.x, point.y + 4, 500, height,
+                     SWP_NOACTIVATE | SWP_SHOWWINDOW);
     } else {
-        SetWindowPos(window_, HWND_TOPMOST, 24, 24, 0, 0,
-                     SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        SetWindowPos(window_, HWND_TOPMOST, 24, 24, 500, height,
+                     SWP_NOACTIVATE | SWP_SHOWWINDOW);
     }
     InvalidateRect(window_, nullptr, TRUE);
     UpdateWindow(window_);
@@ -87,21 +92,20 @@ void CandidateWindow::Paint(HDC dc) {
     HGDIOBJ old = SelectObject(dc, font);
 
     RECT line = rect;
-    line.left += 10;
-    line.top += 6;
-    line.right -= 10;
-    line.bottom = line.top + 24;
+    line.left += kPadding;
+    line.top += kPadding;
+    line.right -= kPadding;
+    line.bottom = line.top + kHeaderHeight;
     std::wstring title = L"编码: " + pending_;
     DrawTextW(dc, title.c_str(), -1, &line, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
 
-    line.top += 24;
-    line.bottom = rect.bottom - 4;
-    std::wstring items;
+    line.top += kHeaderHeight;
     for (size_t i = 0; i < std::min<size_t>(9, candidates_.size()); ++i) {
-        if (!items.empty()) items += L"    ";
-        items += std::to_wstring(i + 1) + L". " + candidates_[i];
+        line.bottom = line.top + kRowHeight;
+        const std::wstring item = std::to_wstring(i + 1) + L". " + candidates_[i];
+        DrawTextW(dc, item.c_str(), -1, &line, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
+        line.top += kRowHeight;
     }
-    DrawTextW(dc, items.c_str(), -1, &line, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
 
     SelectObject(dc, old);
     DeleteObject(font);

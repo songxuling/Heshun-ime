@@ -6,6 +6,7 @@
 /build-tsf-selection-debug/
 /build-tsf-candidates-debug/
 /build-tsf-backspace-debug/
+/build-tsf-release-candidate/
 
 # Rust build output
 /target/

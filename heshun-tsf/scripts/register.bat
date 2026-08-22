@@ -8,8 +8,10 @@ if /i "%~1"=="--elevated" goto elevated
 rem Resolve the DLL before UAC. The elevated child reads this handoff file,
 rem because UAC does not preserve newly-set process environment variables.
 set "DLL=%~f1"
-if "%~1"=="" set "DLL=%~dp0..\..\build-tsf\bin\heshun_tsf.dll"
-for %%I in ("%DLL%") do set "DLL=%%~fI"
+if "%~1"=="" set "DLL=%~dp0heshun_tsf.dll"
+if not exist "%DLL%" set "DLL=%~dp0..\..\build-tsf\bin\heshun_tsf.dll"
+set "TOOL=%~dp0heshun_tsf_profile.exe"
+if not exist "%TOOL%" set "TOOL=%~dp0..\..\build-tsf\bin\heshun_tsf_profile.exe"
 if not exist "%DLL%" (
   echo DLL not found: %DLL%
   exit /b 1
@@ -35,7 +37,8 @@ if "%DLL%"=="" (
   echo Missing absolute DLL path handoff from elevation parent.
   exit /b 1
 )
-set "TOOL=%~dp0..\..\build-tsf\bin\heshun_tsf_profile.exe"
+if not exist "%TOOL%" set "TOOL=%~dp0heshun_tsf_profile.exe"
+if not exist "%TOOL%" set "TOOL=%~dp0..\..\build-tsf\bin\heshun_tsf_profile.exe"
 
 echo [heshun-tsf] Running elevated registration.
 echo [heshun-tsf] DLL: %DLL%

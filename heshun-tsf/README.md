@@ -7,8 +7,15 @@ Windows TSF (Text Services Framework) shell for the `heshun` Rust input-method e
 - Registers a COM `ITfTextInputProcessorEx` text service named **heshun 郑码**.
 - Intercepts `a-z`, Backspace, Escape, Space, and `1-9` through `ITfKeyEventSink`.
 - Loads `schemas/zhengma66.schema.yaml` through the Rust C ABI.
-- Commits returned text into the focused application using a synchronous TSF edit session.
-- Candidate UI and composition/preedit are intentionally deferred. In this stage use Space or `1-9` to select candidates.
+- Commits returned text into the focused application through an asynchronous TSF edit session.
+- Shows a native non-activating candidate window; Composition/preedit underline remains deferred.
+
+## Current behavior
+
+- System-wide Zhengma input in TSF-aware Windows applications.
+- Native non-activating candidate window showing the pending code and candidates; Space chooses the first candidate and `1-9` choose by number.
+- Backspace edits the pending code while one exists, then returns to the host application to delete committed text once the pending code is empty.
+- Escape clears pending code. `Delete` remains owned by the host application.
 
 ## Build
 
@@ -26,6 +33,16 @@ Windows TSF (Text Services Framework) shell for the `heshun` Rust input-method e
    ```
 
 The build copies `heshun.dll` and `heshun/schemas/` beside `heshun_tsf.dll`.
+
+## Package
+
+After a successful release build, create a standalone install directory:
+
+```bat
+heshun-tsf\scripts\package.bat build-tsf\bin
+```
+
+It produces `heshun-tsf\dist\` containing the DLLs, profile tool, schemas, documentation, and self-contained register/unregister scripts. From that directory, run `register.bat` with no parameter; it requests UAC when necessary.
 
 ## Register / unregister
 
