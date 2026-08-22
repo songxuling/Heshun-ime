@@ -46,15 +46,20 @@ public:
 
     STDMETHODIMP DoEditSession(TfEditCookie ec) override {
         Trace("CommitEditSession: begin");
-        ITfInsertAtSelection* insert = nullptr;
-        HRESULT hr = context_->QueryInterface(IID_PPV_ARGS(&insert));
-        if (FAILED(hr)) { Trace("CommitEditSession: ITfInsertAtSelection unavailable " + Hr(hr)); return hr; }
-        // TF_IAS_NOQUERY promises that no inserted range is requested; pass nullptr
-        // rather than a range output pointer, as required by TSF for this flag.
-        hr = insert->InsertTextAtSelection(ec, TF_IAS_NOQUERY, text_.c_str(),
-                                            static_cast<LONG>(text_.size()), nullptr);
-        insert->Release();
-        Trace(FAILED(hr) ? "CommitEditSession: insert failed " + Hr(hr) : "CommitEditSession: insert succeeded");
+        TF_SELECTION selection{};
+        ULONG fetched = 0;
+        HRESULT hr = context_->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &selection, &fetched);
+        if (FAILED(hr) || fetched != 1 || !selection.range) {
+            Trace("CommitEditSession: GetSelection failed " + Hr(FAILED(hr) ? hr : E_FAIL));
+            return FAILED(hr) ? hr : E_FAIL;
+        }
+
+        hr = selection.range->SetText(ec, 0, text_.c_str(), static_cast<LONG>(text_.size()));
+        if (SUCCEEDED(hr)) hr = selection.range->Collapse(ec, TF_ANCHOR_END);
+        if (SUCCEEDED(hr)) hr = context_->SetSelection(ec, 1, &selection);
+        selection.range->Release();
+        Trace(FAILED(hr) ? "CommitEditSession: selection SetText failed " + Hr(hr) :
+                           "CommitEditSession: selection SetText succeeded");
         return hr;
     }
 

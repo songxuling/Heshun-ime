@@ -3,6 +3,7 @@
 /build-tsf-next/
 /build-tsf-input-debug/
 /build-tsf-async-debug/
+/build-tsf-selection-debug/
 
 # Rust build output
 /target/
