@@ -2,6 +2,7 @@
 #include <windowsx.h>
 
 #include <algorithm>
+#include <cmath>
 #include <mutex>
 
 namespace {
@@ -15,10 +16,14 @@ constexpr int kHeaderHeight = 28;
 constexpr int kRowHeight = 25;
 constexpr int kPadding = 8;
 
-HFONT MakeFont(int points) {
-    HDC dc = GetDC(nullptr);
-    const int height = -MulDiv(points, GetDeviceCaps(dc, LOGPIXELSY), 72);
-    ReleaseDC(nullptr, dc);
+int DpiForWindow(HWND window) {
+    const UINT dpi = window ? GetDpiForWindow(window) : 96;
+    return dpi ? static_cast<int>(dpi) : 96;
+}
+
+HFONT MakeFont(HWND window, int points) {
+    const int dpi = DpiForWindow(window);
+    const int height = -MulDiv(points, dpi, 72);
     return CreateFontW(height, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei");
@@ -64,18 +69,36 @@ void CandidateWindow::Show(std::wstring pending, std::vector<std::wstring> candi
         return;
     }
 
+    const int dpi = DpiForWindow(window_);
+    const int scale = dpi;
+    const int header = MulDiv(kHeaderHeight, scale, 96);
+    const int row = MulDiv(kRowHeight, scale, 96);
+    const int padding = MulDiv(kPadding, scale, 96);
     const int rows = static_cast<int>(std::min<size_t>(9, candidates_.size()));
-    const int height = kHeaderHeight + rows * kRowHeight + kPadding * 2;
+    const int client_width = MulDiv(500, scale, 96);
+    const int client_height = header + rows * row + padding * 2;
+    RECT frame{0, 0, client_width, client_height};
+    AdjustWindowRectExForDpi(&frame, WS_POPUP, FALSE, WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST, dpi);
+    const int width = frame.right - frame.left;
+    const int height = frame.bottom - frame.top;
     // Keep the window near the foreground caret without activating it.
     GUITHREADINFO info{sizeof(info)};
     HWND foreground = GetForegroundWindow();
+    HMONITOR monitor = MonitorFromWindow(foreground ? foreground : window_, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO monitor_info{sizeof(monitor_info)};
+    GetMonitorInfoW(monitor, &monitor_info);
+    const RECT work = monitor_info.rcWork;
     if (foreground && GetGUIThreadInfo(GetWindowThreadProcessId(foreground, nullptr), &info) && info.rcCaret.right > info.rcCaret.left) {
         POINT point{info.rcCaret.left, info.rcCaret.bottom};
         ClientToScreen(info.hwndCaret ? info.hwndCaret : foreground, &point);
-        SetWindowPos(window_, HWND_TOPMOST, point.x, point.y + 4, 500, height,
+    const int x = std::clamp(point.x, work.left, std::max(work.left, work.right - width));
+        const int y = std::clamp(point.y + 4, work.top, std::max(work.top, work.bottom - height));
+        SetWindowPos(window_, HWND_TOPMOST, x, y, width, height,
                      SWP_NOACTIVATE | SWP_SHOWWINDOW);
     } else {
-        SetWindowPos(window_, HWND_TOPMOST, 24, 24, 500, height,
+        const int x = std::clamp(work.left + 24, work.left, std::max(work.left, work.right - width));
+        const int y = std::clamp(work.top + 24, work.top, std::max(work.top, work.bottom - height));
+        SetWindowPos(window_, HWND_TOPMOST, x, y, width, height,
                      SWP_NOACTIVATE | SWP_SHOWWINDOW);
     }
     InvalidateRect(window_, nullptr, TRUE);
@@ -107,8 +130,12 @@ void CandidateWindow::Hide() {
 }
 
 size_t CandidateWindow::RowAtY(int y) const {
-    if (y < kPadding + kHeaderHeight) return candidates_.size();
-    const size_t index = static_cast<size_t>((y - kPadding - kHeaderHeight) / kRowHeight);
+    const int scale = DpiForWindow(window_);
+    const int header = MulDiv(kHeaderHeight, scale, 96);
+    const int row = MulDiv(kRowHeight, scale, 96);
+    const int padding = MulDiv(kPadding, scale, 96);
+    if (y < padding + header) return candidates_.size();
+    const size_t index = static_cast<size_t>((y - padding - header) / std::max(1, row));
     return index < std::min<size_t>(9, candidates_.size()) ? index : candidates_.size();
 }
 
@@ -120,20 +147,24 @@ void CandidateWindow::Paint(HDC dc) {
 
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, kText);
-    HFONT font = MakeFont(11);
+    HFONT font = MakeFont(window_, 11);
     HGDIOBJ old = SelectObject(dc, font);
 
+    const int scale = DpiForWindow(window_);
+    const int header = MulDiv(kHeaderHeight, scale, 96);
+    const int row = MulDiv(kRowHeight, scale, 96);
+    const int padding = MulDiv(kPadding, scale, 96);
     RECT line = rect;
-    line.left += kPadding;
-    line.top += kPadding;
-    line.right -= kPadding;
-    line.bottom = line.top + kHeaderHeight;
+    line.left += padding;
+    line.top += padding;
+    line.right -= padding;
+    line.bottom = line.top + header;
     std::wstring title = L"编码: " + pending_;
     DrawTextW(dc, title.c_str(), -1, &line, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
 
-    line.top += kHeaderHeight;
+    line.top += header;
     for (size_t i = 0; i < std::min<size_t>(9, candidates_.size()); ++i) {
-        line.bottom = line.top + kRowHeight;
+        line.bottom = line.top + row;
         if (i == selected_index_) {
             RECT selection = line;
             FillRect(dc, &selection, CreateSolidBrush(kSelectionBackground));
@@ -143,7 +174,7 @@ void CandidateWindow::Paint(HDC dc) {
         }
         const std::wstring item = std::to_wstring(i + 1) + L". " + candidates_[i];
         DrawTextW(dc, item.c_str(), -1, &line, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
-        line.top += kRowHeight;
+        line.top += row;
     }
 
     SelectObject(dc, old);
