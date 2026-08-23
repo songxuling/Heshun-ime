@@ -1,4 +1,5 @@
 #include "candidate_window.h"
+#include <windowsx.h>
 
 #include <algorithm>
 #include <mutex>
@@ -74,6 +75,10 @@ void CandidateWindow::Show(std::wstring pending, std::vector<std::wstring> candi
     UpdateWindow(window_);
 }
 
+void CandidateWindow::SetCandidateClickHandler(std::function<void(size_t)> handler) {
+    candidate_click_handler_ = std::move(handler);
+}
+
 void CandidateWindow::Hide() {
     if (window_) ShowWindow(window_, SW_HIDE);
     pending_.clear();
@@ -131,7 +136,17 @@ LRESULT CALLBACK CandidateWindow::WindowProc(HWND window, UINT message, WPARAM w
         return 0;
     }
     case WM_NCHITTEST:
-        return HTTRANSPARENT;
+        return HTCLIENT;
+    case WM_LBUTTONUP: {
+        const int y = GET_Y_LPARAM(lparam);
+        if (y >= kPadding + kHeaderHeight) {
+            const size_t index = static_cast<size_t>((y - kPadding - kHeaderHeight) / kRowHeight);
+            if (index < std::min<size_t>(9, self->candidates_.size()) && self->candidate_click_handler_) {
+                self->candidate_click_handler_(index);
+            }
+        }
+        return 0;
+    }
     }
     return DefWindowProcW(window, message, wparam, lparam);
 }

@@ -34,6 +34,7 @@ void  hs_set_ascii_mode(hs_handle* sess, int ascii);  /* 设置西文模式 */
 /* 状态 */
 char* hs_pending(hs_handle* sess);                    /* 当前编码 */
 char* hs_candidates(hs_handle* sess, int limit);      /* "词\x01码\x02词\x01码…"; limit<=0 不限 */
+char* hs_candidates_page(hs_handle* sess, int offset, int limit); /* 候选页，offset 从 0 开始 */
 
 /* 用户词典 */
 int   hs_user_dict_save(hs_handle* eng, const char* path); /* 1=成功 0=失败 */

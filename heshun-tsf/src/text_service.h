@@ -42,6 +42,9 @@ private:
     bool HasPending() const;
     bool IsHandledKey(WPARAM key) const;
     void ToggleAsciiMode(ITfContext* context);
+    void SelectCandidate(ITfContext* context, size_t index);
+    void ChangeCandidatePage(int direction);
+    bool HasCandidatePage(int offset) const;
     bool FeedKey(WPARAM key, char** committed);
     HRESULT CommitText(ITfContext* context, const char* utf8);
     HRESULT UpdateComposition(ITfContext* context);
@@ -57,9 +60,11 @@ private:
     hs_handle* session_ = nullptr;
     ITfComposition* composition_ = nullptr;
     std::unique_ptr<CandidateWindow> candidate_window_;
+    ITfContext* active_context_ = nullptr;
     bool ascii_mode_ = false;
     bool shift_down_ = false;
     bool shift_used_with_other_key_ = false;
+    int candidate_offset_ = 0;
 };
 
 HRESULT CreateHeshunTextService(REFIID riid, void** object);

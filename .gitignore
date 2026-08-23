@@ -9,6 +9,10 @@
 /build-tsf-release-candidate/
 /build-tsf-ascii-debug/
 /build-tsf-log-debug/
+/build-tsf-pagination-verify/
+/build-tsf-pagination-space-verify/
+/build-tsf-pagination-boundary-verify/
+/build-tsf-mouse-verify/
 /build-tsf-composition-verify/
 /build-tsf-composition-debug/
 /heshun-tsf/dist/

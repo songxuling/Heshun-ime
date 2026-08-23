@@ -206,6 +206,22 @@ pub extern "C" fn hs_candidates(sess: *mut c_void, limit: i32) -> *mut c_char {
     ret_string(out)
 }
 
+#[no_mangle]
+pub extern "C" fn hs_candidates_page(sess: *mut c_void, offset: i32, limit: i32) -> *mut c_char {
+    let Some(s) = sess_mut(sess) else { return ptr::null_mut(); };
+    let offset = offset.max(0) as usize;
+    let limit = if limit <= 0 { 9 } else { limit as usize };
+    let candidates = s.candidates(offset.saturating_add(limit));
+    let mut out = String::new();
+    for (i, c) in candidates.iter().skip(offset).take(limit).enumerate() {
+        if i > 0 { out.push('\u{2}'); }
+        out.push_str(&c.word);
+        out.push('\u{1}');
+        out.push_str(&c.code);
+    }
+    ret_string(out)
+}
+
 /// 释放本库返回的字符串。
 #[no_mangle]
 pub extern "C" fn hs_str_free(p: *mut c_char) {

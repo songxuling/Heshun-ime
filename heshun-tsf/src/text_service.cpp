@@ -364,6 +364,7 @@ void HeshunTextService::ClearComposition() {
 
 void HeshunTextService::FreeEngine() {
     ClearComposition();
+    if (active_context_) { active_context_->Release(); active_context_ = nullptr; }
     if (candidate_window_) candidate_window_->Hide();
     if (session_) { hs_session_free(session_); session_ = nullptr; }
     if (engine_) { hs_engine_free(engine_); engine_ = nullptr; }
@@ -396,7 +397,7 @@ HRESULT HeshunTextService::CancelComposition(ITfContext* context) {
 void HeshunTextService::UpdateCandidateWindow() {
     if (!session_) return;
     char* pending_raw = hs_pending(session_);
-    char* candidates_raw = hs_candidates(session_, 9);
+    char* candidates_raw = hs_candidates_page(session_, candidate_offset_, 9);
     std::wstring pending = pending_raw ? Utf8ToUtf16(pending_raw) : L"";
     std::vector<std::wstring> candidates = ParseCandidateWords(candidates_raw);
     if (pending_raw) hs_str_free(pending_raw);
@@ -407,9 +408,47 @@ void HeshunTextService::UpdateCandidateWindow() {
         Trace("CandidateWindow: hidden");
         return;
     }
-    if (!candidate_window_) candidate_window_ = std::make_unique<CandidateWindow>();
+    if (!candidate_window_) {
+        candidate_window_ = std::make_unique<CandidateWindow>();
+        candidate_window_->SetCandidateClickHandler([this](size_t index) {
+            SelectCandidate(active_context_, index);
+        });
+    }
     candidate_window_->Show(std::move(pending), std::move(candidates));
     Trace("CandidateWindow: shown");
+}
+
+bool HeshunTextService::HasCandidatePage(int offset) const {
+    if (!session_ || offset < 0) return false;
+    char* page = hs_candidates_page(session_, offset, 1);
+    const bool exists = page && *page;
+    if (page) hs_str_free(page);
+    return exists;
+}
+
+void HeshunTextService::ChangeCandidatePage(int direction) {
+    if (!session_ || !HasPending()) return;
+    const int next = std::max(0, candidate_offset_ + direction * 9);
+    if (next != candidate_offset_ && !HasCandidatePage(next)) {
+        Trace(direction > 0 ? "CandidateWindow: next page unavailable" : "CandidateWindow: already first page");
+        return;
+    }
+    candidate_offset_ = next;
+    UpdateCandidateWindow();
+    std::ostringstream out;
+    out << (direction > 0 ? "CandidateWindow: next page offset=" : "CandidateWindow: previous page offset=") << candidate_offset_;
+    Trace(out.str());
+}
+
+void HeshunTextService::SelectCandidate(ITfContext* context, size_t index) {
+    if (!context || !session_) return;
+    const int candidate_index = candidate_offset_ + static_cast<int>(index) + 1;
+    char* committed = hs_select(session_, candidate_index);
+    if (!committed) return;
+    if (candidate_window_) candidate_window_->Hide();
+    CommitText(context, committed);
+    hs_str_free(committed);
+    Trace("CandidateWindow: mouse candidate selected");
 }
 
 bool HeshunTextService::HasPending() const {
@@ -437,19 +476,20 @@ bool HeshunTextService::IsHandledKey(WPARAM key) const {
     if (key >= 'A' && key <= 'Z') return true;
     if (key >= 'a' && key <= 'z') return true;
     if (key == VK_BACK) return HasPending();
-    if (key == VK_ESCAPE || key == VK_SPACE) return true;
+    if (key == VK_ESCAPE || key == VK_SPACE || key == VK_PRIOR || key == VK_NEXT) return true;
     return key >= '1' && key <= '9';
 }
 
 bool HeshunTextService::FeedKey(WPARAM key, char** committed) {
     if (!session_) return false;
     *committed = nullptr;
-    if (key >= 'A' && key <= 'Z') return hs_feed(session_, static_cast<char>(key - 'A' + 'a'), committed) != 0;
-    if (key >= 'a' && key <= 'z') return hs_feed(session_, static_cast<char>(key), committed) != 0;
-    if (key == VK_BACK) { hs_backspace(session_); return true; }
-    if (key == VK_ESCAPE) { hs_clear(session_); return true; }
-    if (key == VK_SPACE) { *committed = hs_select_first(session_); return true; }
-    if (key >= '1' && key <= '9') { *committed = hs_select(session_, static_cast<int>(key - '0')); return true; }
+    if (key >= 'A' && key <= 'Z') { candidate_offset_ = 0; return hs_feed(session_, static_cast<char>(key - 'A' + 'a'), committed) != 0; }
+    if (key >= 'a' && key <= 'z') { candidate_offset_ = 0; return hs_feed(session_, static_cast<char>(key), committed) != 0; }
+    if (key == VK_BACK) { hs_backspace(session_); candidate_offset_ = 0; return true; }
+    if (key == VK_ESCAPE) { hs_clear(session_); candidate_offset_ = 0; return true; }
+    if (key == VK_PRIOR || key == VK_NEXT) { ChangeCandidatePage(key == VK_NEXT ? 1 : -1); return true; }
+    if (key == VK_SPACE) { *committed = hs_select(session_, candidate_offset_ + 1); candidate_offset_ = 0; return true; }
+    if (key >= '1' && key <= '9') { *committed = hs_select(session_, candidate_offset_ + static_cast<int>(key - '0')); candidate_offset_ = 0; return true; }
     return false;
 }
 
@@ -463,6 +503,11 @@ STDMETHODIMP HeshunTextService::OnTestKeyDown(ITfContext*, WPARAM wparam, LPARAM
 
 STDMETHODIMP HeshunTextService::OnKeyDown(ITfContext* context, WPARAM wparam, LPARAM, BOOL* eaten) {
     if (!eaten) return E_INVALIDARG;
+    if (context && context != active_context_) {
+        if (active_context_) active_context_->Release();
+        active_context_ = context;
+        active_context_->AddRef();
+    }
     *eaten = FALSE;
     if (wparam == VK_SHIFT) {
         shift_down_ = true;
