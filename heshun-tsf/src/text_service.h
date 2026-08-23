@@ -45,6 +45,8 @@ private:
     void SelectCandidate(ITfContext* context, size_t index);
     void ChangeCandidatePage(int direction);
     bool HasCandidatePage(int offset) const;
+    int SelectedCandidateIndex() const;
+    void TraceSelectionKey(WPARAM key) const;
     bool FeedKey(WPARAM key, char** committed);
     HRESULT CommitText(ITfContext* context, const char* utf8);
     HRESULT UpdateComposition(ITfContext* context);

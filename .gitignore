@@ -12,6 +12,12 @@
 /build-tsf-pagination-verify/
 /build-tsf-pagination-space-verify/
 /build-tsf-pagination-boundary-verify/
+/build-tsf-highlight-verify/
+/build-tsf-highlight-nav-verify/
+/build-tsf-highlight-nav-persist-verify/
+/build-tsf-highlight-nav-select-verify/
+/build-tsf-highlight-nav-select-state-verify/
+/build-tsf-selection-diagnose/
 /build-tsf-mouse-verify/
 /build-tsf-composition-verify/
 /build-tsf-composition-debug/

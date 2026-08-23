@@ -9,6 +9,8 @@ constexpr wchar_t kClassName[] = L"HeshunTsfCandidateWindow";
 constexpr COLORREF kBackground = RGB(255, 255, 255);
 constexpr COLORREF kBorder = RGB(190, 190, 190);
 constexpr COLORREF kText = RGB(30, 30, 30);
+constexpr COLORREF kSelectionBackground = RGB(220, 235, 252);
+constexpr COLORREF kSelectionText = RGB(0, 50, 110);
 constexpr int kHeaderHeight = 28;
 constexpr int kRowHeight = 25;
 constexpr int kPadding = 8;
@@ -50,8 +52,13 @@ bool CandidateWindow::EnsureWindow() {
 }
 
 void CandidateWindow::Show(std::wstring pending, std::vector<std::wstring> candidates) {
+    const bool content_changed = pending_ != pending || candidates_ != candidates;
     pending_ = std::move(pending);
     candidates_ = std::move(candidates);
+    if (content_changed) {
+        selected_index_ = 0;
+        keyboard_selection_ = false;
+    }
     if (pending_.empty() || candidates_.empty() || !EnsureWindow()) {
         Hide();
         return;
@@ -79,10 +86,30 @@ void CandidateWindow::SetCandidateClickHandler(std::function<void(size_t)> handl
     candidate_click_handler_ = std::move(handler);
 }
 
+void CandidateWindow::MoveSelection(int direction) {
+    const size_t count = std::min<size_t>(9, candidates_.size());
+    if (!count) return;
+    const int next = static_cast<int>(selected_index_) + direction;
+    selected_index_ = static_cast<size_t>((next % static_cast<int>(count) + static_cast<int>(count)) % static_cast<int>(count));
+    InvalidateRect(window_, nullptr, FALSE);
+}
+
+void CandidateWindow::UseKeyboardSelection() {
+    keyboard_selection_ = true;
+}
+
 void CandidateWindow::Hide() {
     if (window_) ShowWindow(window_, SW_HIDE);
     pending_.clear();
     candidates_.clear();
+    selected_index_ = 0;
+    keyboard_selection_ = false;
+}
+
+size_t CandidateWindow::RowAtY(int y) const {
+    if (y < kPadding + kHeaderHeight) return candidates_.size();
+    const size_t index = static_cast<size_t>((y - kPadding - kHeaderHeight) / kRowHeight);
+    return index < std::min<size_t>(9, candidates_.size()) ? index : candidates_.size();
 }
 
 void CandidateWindow::Paint(HDC dc) {
@@ -107,6 +134,13 @@ void CandidateWindow::Paint(HDC dc) {
     line.top += kHeaderHeight;
     for (size_t i = 0; i < std::min<size_t>(9, candidates_.size()); ++i) {
         line.bottom = line.top + kRowHeight;
+        if (i == selected_index_) {
+            RECT selection = line;
+            FillRect(dc, &selection, CreateSolidBrush(kSelectionBackground));
+            SetTextColor(dc, kSelectionText);
+        } else {
+            SetTextColor(dc, kText);
+        }
         const std::wstring item = std::to_wstring(i + 1) + L". " + candidates_[i];
         DrawTextW(dc, item.c_str(), -1, &line, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
         line.top += kRowHeight;
@@ -137,13 +171,25 @@ LRESULT CALLBACK CandidateWindow::WindowProc(HWND window, UINT message, WPARAM w
     }
     case WM_NCHITTEST:
         return HTCLIENT;
+    case WM_MOUSEMOVE: {
+        TRACKMOUSEEVENT track{sizeof(track), TME_LEAVE, window, 0};
+        TrackMouseEvent(&track);
+        const size_t index = self->RowAtY(GET_Y_LPARAM(lparam));
+        if (index != self->candidates_.size() && index != self->selected_index_) {
+            self->selected_index_ = index;
+            self->keyboard_selection_ = false;
+            InvalidateRect(window, nullptr, FALSE);
+        }
+        return 0;
+    }
+    case WM_MOUSELEAVE:
+        self->selected_index_ = 0;
+        InvalidateRect(window, nullptr, FALSE);
+        return 0;
     case WM_LBUTTONUP: {
-        const int y = GET_Y_LPARAM(lparam);
-        if (y >= kPadding + kHeaderHeight) {
-            const size_t index = static_cast<size_t>((y - kPadding - kHeaderHeight) / kRowHeight);
-            if (index < std::min<size_t>(9, self->candidates_.size()) && self->candidate_click_handler_) {
-                self->candidate_click_handler_(index);
-            }
+        const size_t index = self->RowAtY(GET_Y_LPARAM(lparam));
+        if (index != self->candidates_.size() && self->candidate_click_handler_) {
+            self->candidate_click_handler_(index);
         }
         return 0;
     }

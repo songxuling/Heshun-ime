@@ -440,6 +440,19 @@ void HeshunTextService::ChangeCandidatePage(int direction) {
     Trace(out.str());
 }
 
+int HeshunTextService::SelectedCandidateIndex() const {
+    const size_t row = candidate_window_ ? candidate_window_->selected_index() : 0;
+    return candidate_offset_ + static_cast<int>(row) + 1;
+}
+
+void HeshunTextService::TraceSelectionKey(WPARAM key) const {
+    std::ostringstream out;
+    out << "CandidateWindow: select key=" << (key == VK_RETURN ? "Enter" : "Space")
+        << " index=" << SelectedCandidateIndex()
+        << " keyboard=" << (candidate_window_ && candidate_window_->keyboard_selection() ? "true" : "false");
+    Trace(out.str());
+}
+
 void HeshunTextService::SelectCandidate(ITfContext* context, size_t index) {
     if (!context || !session_) return;
     const int candidate_index = candidate_offset_ + static_cast<int>(index) + 1;
@@ -476,7 +489,7 @@ bool HeshunTextService::IsHandledKey(WPARAM key) const {
     if (key >= 'A' && key <= 'Z') return true;
     if (key >= 'a' && key <= 'z') return true;
     if (key == VK_BACK) return HasPending();
-    if (key == VK_ESCAPE || key == VK_SPACE || key == VK_PRIOR || key == VK_NEXT) return true;
+    if (key == VK_ESCAPE || key == VK_SPACE || key == VK_PRIOR || key == VK_NEXT || key == VK_UP || key == VK_DOWN || key == VK_RETURN) return true;
     return key >= '1' && key <= '9';
 }
 
@@ -488,7 +501,21 @@ bool HeshunTextService::FeedKey(WPARAM key, char** committed) {
     if (key == VK_BACK) { hs_backspace(session_); candidate_offset_ = 0; return true; }
     if (key == VK_ESCAPE) { hs_clear(session_); candidate_offset_ = 0; return true; }
     if (key == VK_PRIOR || key == VK_NEXT) { ChangeCandidatePage(key == VK_NEXT ? 1 : -1); return true; }
-    if (key == VK_SPACE) { *committed = hs_select(session_, candidate_offset_ + 1); candidate_offset_ = 0; return true; }
+    if (key == VK_UP || key == VK_DOWN) {
+        if (candidate_window_) {
+            candidate_window_->MoveSelection(key == VK_DOWN ? 1 : -1);
+            candidate_window_->UseKeyboardSelection();
+        }
+        Trace(key == VK_DOWN ? "CandidateWindow: selection down" : "CandidateWindow: selection up");
+        return true;
+    }
+    if (key == VK_RETURN || key == VK_SPACE) {
+        TraceSelectionKey(key);
+        *committed = hs_select(session_, SelectedCandidateIndex());
+        if (*committed) Trace(std::string("CandidateWindow: selected text=") + *committed);
+        candidate_offset_ = 0;
+        return true;
+    }
     if (key >= '1' && key <= '9') { *committed = hs_select(session_, candidate_offset_ + static_cast<int>(key - '0')); candidate_offset_ = 0; return true; }
     return false;
 }
