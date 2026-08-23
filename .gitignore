@@ -7,6 +7,7 @@
 /build-tsf-candidates-debug/
 /build-tsf-backspace-debug/
 /build-tsf-release-candidate/
+/build-tsf-ascii-debug/
 /heshun-tsf/dist/
 
 # Rust build output

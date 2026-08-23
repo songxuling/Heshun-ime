@@ -37,6 +37,7 @@ private:
     void FreeEngine();
     bool HasPending() const;
     bool IsHandledKey(WPARAM key) const;
+    void ToggleAsciiMode();
     bool FeedKey(WPARAM key, char** committed);
     HRESULT CommitText(ITfContext* context, const char* utf8);
     void UpdateCandidateWindow();
@@ -49,6 +50,9 @@ private:
     hs_handle* engine_ = nullptr;
     hs_handle* session_ = nullptr;
     std::unique_ptr<CandidateWindow> candidate_window_;
+    bool ascii_mode_ = false;
+    bool shift_down_ = false;
+    bool shift_used_with_other_key_ = false;
 };
 
 HRESULT CreateHeshunTextService(REFIID riid, void** object);

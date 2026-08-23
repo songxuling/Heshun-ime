@@ -209,6 +209,7 @@ bool HeshunTextService::LoadEngine() {
     if (!engine_) { Trace("LoadEngine: hs_engine_load_schema returned null"); return false; }
     session_ = hs_session_new(engine_);
     if (!session_) Trace("LoadEngine: hs_session_new returned null");
+    if (session_) hs_set_ascii_mode(session_, ascii_mode_ ? 1 : 0);
     return session_ != nullptr;
 }
 
@@ -254,7 +255,19 @@ bool HeshunTextService::HasPending() const {
     return has_pending;
 }
 
+void HeshunTextService::ToggleAsciiMode() {
+    ascii_mode_ = !ascii_mode_;
+    if (session_) {
+        hs_clear(session_);
+        hs_set_ascii_mode(session_, ascii_mode_ ? 1 : 0);
+    }
+    if (candidate_window_) candidate_window_->Hide();
+    Trace(ascii_mode_ ? "Mode: English" : "Mode: Chinese");
+}
+
 bool HeshunTextService::IsHandledKey(WPARAM key) const {
+    if (key == VK_SHIFT) return true;
+    if (ascii_mode_) return false;
     if (key >= 'A' && key <= 'Z') return true;
     if (key >= 'a' && key <= 'z') return true;
     if (key == VK_BACK) return HasPending();
@@ -285,6 +298,13 @@ STDMETHODIMP HeshunTextService::OnTestKeyDown(ITfContext*, WPARAM wparam, LPARAM
 STDMETHODIMP HeshunTextService::OnKeyDown(ITfContext* context, WPARAM wparam, LPARAM, BOOL* eaten) {
     if (!eaten) return E_INVALIDARG;
     *eaten = FALSE;
+    if (wparam == VK_SHIFT) {
+        shift_down_ = true;
+        shift_used_with_other_key_ = false;
+        *eaten = TRUE;
+        return S_OK;
+    }
+    if (shift_down_) shift_used_with_other_key_ = true;
     if (!IsHandledKey(wparam)) return S_OK;
     Trace("OnKeyDown: handled");
     char* committed = nullptr;
@@ -303,14 +323,21 @@ STDMETHODIMP HeshunTextService::OnKeyDown(ITfContext* context, WPARAM wparam, LP
     return S_OK;
 }
 
-STDMETHODIMP HeshunTextService::OnTestKeyUp(ITfContext*, WPARAM, LPARAM, BOOL* eaten) {
+STDMETHODIMP HeshunTextService::OnTestKeyUp(ITfContext*, WPARAM wparam, LPARAM, BOOL* eaten) {
     if (!eaten) return E_INVALIDARG;
-    *eaten = FALSE;
+    *eaten = wparam == VK_SHIFT ? TRUE : FALSE;
     return S_OK;
 }
-STDMETHODIMP HeshunTextService::OnKeyUp(ITfContext*, WPARAM, LPARAM, BOOL* eaten) {
+STDMETHODIMP HeshunTextService::OnKeyUp(ITfContext*, WPARAM wparam, LPARAM, BOOL* eaten) {
     if (!eaten) return E_INVALIDARG;
     *eaten = FALSE;
+    if (wparam == VK_SHIFT) {
+        const bool toggle = shift_down_ && !shift_used_with_other_key_;
+        shift_down_ = false;
+        shift_used_with_other_key_ = false;
+        if (toggle) ToggleAsciiMode();
+        *eaten = TRUE;
+    }
     return S_OK;
 }
 STDMETHODIMP HeshunTextService::OnPreservedKey(ITfContext*, REFGUID, BOOL* eaten) {

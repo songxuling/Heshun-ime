@@ -16,6 +16,7 @@ Windows TSF (Text Services Framework) shell for the `heshun` Rust input-method e
 - Native non-activating candidate window showing the pending code and candidates; Space chooses the first candidate and `1-9` choose by number.
 - Backspace edits the pending code while one exists, then returns to the host application to delete committed text once the pending code is empty.
 - Escape clears pending code. `Delete` remains owned by the host application.
+- Tap Shift alone to toggle Chinese and English modes. A Shift key used with another key does not toggle modes; entering English mode clears any pending Zhengma code.
 
 ## Build
 
