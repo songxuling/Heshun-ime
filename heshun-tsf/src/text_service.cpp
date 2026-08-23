@@ -205,7 +205,7 @@ std::vector<std::wstring> ParseCandidateWords(const char* value) {
     return result;
 }
 
-std::string ModuleDirectory() {
+std::filesystem::path ModuleDirectoryPath() {
     std::vector<wchar_t> path(MAX_PATH);
     DWORD length = 0;
     for (;;) {
@@ -214,21 +214,41 @@ std::string ModuleDirectory() {
         if (length < path.size() - 1) break;
         path.resize(path.size() * 2);
     }
-    std::wstring directory(path.data(), length);
-    const auto slash = directory.find_last_of(L"\\/");
-    if (slash == std::wstring::npos) return {};
-    directory.resize(slash);
-    const int bytes = WideCharToMultiByte(CP_UTF8, 0, directory.data(), static_cast<int>(directory.size()), nullptr, 0, nullptr, nullptr);
+    std::filesystem::path module(path.data(), path.data() + length);
+    return module.parent_path();
+}
+
+std::string ModuleDirectory() {
+    const auto directory = ModuleDirectoryPath();
+    if (directory.empty()) return {};
+    const std::wstring wide = directory.wstring();
+    const int bytes = WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
     if (!bytes) return {};
     std::string result(static_cast<size_t>(bytes), '\0');
-    if (!WideCharToMultiByte(CP_UTF8, 0, directory.data(), static_cast<int>(directory.size()), result.data(), bytes, nullptr, nullptr)) return {};
+    if (!WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), result.data(), bytes, nullptr, nullptr)) return {};
     return result;
 }
 
 void Trace(const std::string& message) {
-    const std::string directory = ModuleDirectory();
-    if (directory.empty()) return;
-    std::ofstream log(std::filesystem::u8path(directory + "\\heshun-tsf.log"), std::ios::app);
+    static std::filesystem::path log_path;
+    if (log_path.empty()) {
+        const auto module_dir = ModuleDirectoryPath();
+        if (!module_dir.empty()) {
+            const auto candidate = module_dir / L"heshun-tsf.log";
+            std::ofstream probe(candidate, std::ios::app);
+            if (probe) log_path = candidate;
+        }
+        if (log_path.empty()) {
+            std::vector<wchar_t> temp(MAX_PATH);
+            const DWORD length = GetTempPathW(static_cast<DWORD>(temp.size()), temp.data());
+            if (length && length < temp.size()) {
+                log_path = std::filesystem::path(temp.data()) /
+                           (L"heshun-tsf-" + std::to_wstring(GetCurrentProcessId()) + L".log");
+            }
+        }
+    }
+    if (log_path.empty()) return;
+    std::ofstream log(log_path, std::ios::app);
     if (log) log << message << '\n';
 }
 
