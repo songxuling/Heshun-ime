@@ -30,6 +30,10 @@ public:
     STDMETHODIMP OnKeyUp(ITfContext* context, WPARAM wparam, LPARAM lparam, BOOL* eaten) override;
     STDMETHODIMP OnPreservedKey(ITfContext* context, REFGUID guid, BOOL* eaten) override;
 
+    ITfComposition* composition() const { return composition_; }
+    void SetComposition(ITfComposition* composition);
+    void ClearComposition();
+
 private:
     ~HeshunTextService();
 
@@ -37,9 +41,11 @@ private:
     void FreeEngine();
     bool HasPending() const;
     bool IsHandledKey(WPARAM key) const;
-    void ToggleAsciiMode();
+    void ToggleAsciiMode(ITfContext* context);
     bool FeedKey(WPARAM key, char** committed);
     HRESULT CommitText(ITfContext* context, const char* utf8);
+    HRESULT UpdateComposition(ITfContext* context);
+    HRESULT CancelComposition(ITfContext* context);
     void UpdateCandidateWindow();
     void SaveUserDictionary();
 
@@ -49,6 +55,7 @@ private:
     DWORD key_sink_cookie_ = TF_INVALID_COOKIE;
     hs_handle* engine_ = nullptr;
     hs_handle* session_ = nullptr;
+    ITfComposition* composition_ = nullptr;
     std::unique_ptr<CandidateWindow> candidate_window_;
     bool ascii_mode_ = false;
     bool shift_down_ = false;

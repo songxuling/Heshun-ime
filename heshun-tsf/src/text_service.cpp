@@ -69,6 +69,112 @@ private:
     std::wstring text_;
 };
 
+class CompositionEditSession final : public ITfEditSession {
+public:
+    enum class Action { Update, Commit, Cancel };
+
+    CompositionEditSession(HeshunTextService* service, ITfContext* context, Action action, std::wstring text = {})
+        : service_(service), context_(context), action_(action), text_(std::move(text)) {
+        service_->AddRef();
+        context_->AddRef();
+    }
+    ~CompositionEditSession() { context_->Release(); service_->Release(); }
+
+    STDMETHODIMP QueryInterface(REFIID riid, void** object) override {
+        if (!object) return E_INVALIDARG;
+        *object = nullptr;
+        if (riid == IID_IUnknown || riid == IID_ITfEditSession) {
+            *object = static_cast<ITfEditSession*>(this);
+            AddRef();
+            return S_OK;
+        }
+        return E_NOINTERFACE;
+    }
+    STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&ref_count_); }
+    STDMETHODIMP_(ULONG) Release() override {
+        const ULONG count = InterlockedDecrement(&ref_count_);
+        if (!count) delete this;
+        return count;
+    }
+
+    STDMETHODIMP DoEditSession(TfEditCookie ec) override {
+        if (action_ == Action::Cancel) return End(ec, true);
+        if (action_ == Action::Commit) return Commit(ec);
+        return Update(ec);
+    }
+
+private:
+    HRESULT Update(TfEditCookie ec) {
+        if (text_.empty()) return End(ec, true);
+        ITfComposition* composition = service_->composition();
+        HRESULT hr = S_OK;
+        if (!composition) {
+            TF_SELECTION selection{};
+            ULONG fetched = 0;
+            hr = context_->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &selection, &fetched);
+            if (FAILED(hr) || fetched != 1 || !selection.range) return FAILED(hr) ? hr : E_FAIL;
+            ITfContextComposition* contexts = nullptr;
+            hr = context_->QueryInterface(IID_PPV_ARGS(&contexts));
+            if (SUCCEEDED(hr)) {
+                hr = contexts->StartComposition(ec, selection.range, nullptr, &composition);
+                contexts->Release();
+            }
+            selection.range->Release();
+            if (FAILED(hr)) return hr;
+            service_->SetComposition(composition);
+            composition->Release();
+            composition = service_->composition();
+        }
+        ITfRange* range = nullptr;
+        hr = composition->GetRange(&range);
+        if (SUCCEEDED(hr)) {
+            hr = range->SetText(ec, 0, text_.c_str(), static_cast<LONG>(text_.size()));
+            range->Release();
+        }
+        Trace(FAILED(hr) ? "Composition: update failed " + Hr(hr) : "Composition: updated");
+        return hr;
+    }
+
+    HRESULT Commit(TfEditCookie ec) {
+        ITfComposition* composition = service_->composition();
+        if (!composition) return E_FAIL;
+        ITfRange* range = nullptr;
+        HRESULT hr = composition->GetRange(&range);
+        if (SUCCEEDED(hr)) {
+            hr = range->SetText(ec, 0, text_.c_str(), static_cast<LONG>(text_.size()));
+            range->Release();
+        }
+        if (SUCCEEDED(hr)) hr = composition->EndComposition(ec);
+        if (SUCCEEDED(hr)) service_->ClearComposition();
+        Trace(FAILED(hr) ? "Composition: commit failed " + Hr(hr) : "Composition: committed");
+        return hr;
+    }
+
+    HRESULT End(TfEditCookie ec, bool erase) {
+        ITfComposition* composition = service_->composition();
+        if (!composition) return S_OK;
+        HRESULT hr = S_OK;
+        if (erase) {
+            ITfRange* range = nullptr;
+            hr = composition->GetRange(&range);
+            if (SUCCEEDED(hr)) {
+                hr = range->SetText(ec, 0, L"", 0);
+                range->Release();
+            }
+        }
+        if (SUCCEEDED(hr)) hr = composition->EndComposition(ec);
+        if (SUCCEEDED(hr)) service_->ClearComposition();
+        Trace(FAILED(hr) ? "Composition: cancel failed " + Hr(hr) : "Composition: cancelled");
+        return hr;
+    }
+
+    LONG ref_count_ = 1;
+    HeshunTextService* service_ = nullptr;
+    ITfContext* context_ = nullptr;
+    Action action_;
+    std::wstring text_;
+};
+
 std::wstring Utf8ToUtf16(const char* value) {
     if (!value || !*value) return {};
     const int length = static_cast<int>(std::strlen(value));
@@ -222,10 +328,49 @@ void HeshunTextService::SaveUserDictionary() {
     }
 }
 
+void HeshunTextService::SetComposition(ITfComposition* composition) {
+    if (composition == composition_) return;
+    ClearComposition();
+    composition_ = composition;
+    if (composition_) composition_->AddRef();
+}
+
+void HeshunTextService::ClearComposition() {
+    if (composition_) {
+        composition_->Release();
+        composition_ = nullptr;
+    }
+}
+
 void HeshunTextService::FreeEngine() {
+    ClearComposition();
     if (candidate_window_) candidate_window_->Hide();
     if (session_) { hs_session_free(session_); session_ = nullptr; }
     if (engine_) { hs_engine_free(engine_); engine_ = nullptr; }
+}
+
+HRESULT HeshunTextService::UpdateComposition(ITfContext* context) {
+    if (!context || !session_) return E_INVALIDARG;
+    char* pending = hs_pending(session_);
+    const std::wstring text = pending ? Utf8ToUtf16(pending) : L"";
+    if (pending) hs_str_free(pending);
+    auto* edit = new (std::nothrow) CompositionEditSession(this, context,
+        text.empty() ? CompositionEditSession::Action::Cancel : CompositionEditSession::Action::Update, text);
+    if (!edit) return E_OUTOFMEMORY;
+    HRESULT session_hr = E_FAIL;
+    const HRESULT hr = context->RequestEditSession(client_id_, edit, TF_ES_ASYNC | TF_ES_READWRITE, &session_hr);
+    edit->Release();
+    return FAILED(hr) ? hr : S_OK;
+}
+
+HRESULT HeshunTextService::CancelComposition(ITfContext* context) {
+    if (!context || !composition_) return S_OK;
+    auto* edit = new (std::nothrow) CompositionEditSession(this, context, CompositionEditSession::Action::Cancel);
+    if (!edit) return E_OUTOFMEMORY;
+    HRESULT session_hr = E_FAIL;
+    const HRESULT hr = context->RequestEditSession(client_id_, edit, TF_ES_ASYNC | TF_ES_READWRITE, &session_hr);
+    edit->Release();
+    return FAILED(hr) ? hr : S_OK;
 }
 
 void HeshunTextService::UpdateCandidateWindow() {
@@ -255,12 +400,13 @@ bool HeshunTextService::HasPending() const {
     return has_pending;
 }
 
-void HeshunTextService::ToggleAsciiMode() {
+void HeshunTextService::ToggleAsciiMode(ITfContext* context) {
     ascii_mode_ = !ascii_mode_;
     if (session_) {
         hs_clear(session_);
         hs_set_ascii_mode(session_, ascii_mode_ ? 1 : 0);
     }
+    CancelComposition(context);
     if (candidate_window_) candidate_window_->Hide();
     Trace(ascii_mode_ ? "Mode: English" : "Mode: Chinese");
 }
@@ -310,7 +456,6 @@ STDMETHODIMP HeshunTextService::OnKeyDown(ITfContext* context, WPARAM wparam, LP
     char* committed = nullptr;
     if (!FeedKey(wparam, &committed)) { Trace("OnKeyDown: engine rejected key"); return S_OK; }
     *eaten = TRUE;
-    UpdateCandidateWindow();
     if (committed) {
         if (candidate_window_) candidate_window_->Hide();
         Trace("OnKeyDown: committing engine result");
@@ -319,6 +464,8 @@ STDMETHODIMP HeshunTextService::OnKeyDown(ITfContext* context, WPARAM wparam, LP
         Trace(FAILED(hr) ? "OnKeyDown: CommitText failed" : "OnKeyDown: CommitText succeeded");
         return hr;
     }
+    UpdateComposition(context);
+    UpdateCandidateWindow();
     Trace("OnKeyDown: awaiting more input");
     return S_OK;
 }
@@ -328,14 +475,14 @@ STDMETHODIMP HeshunTextService::OnTestKeyUp(ITfContext*, WPARAM wparam, LPARAM, 
     *eaten = wparam == VK_SHIFT ? TRUE : FALSE;
     return S_OK;
 }
-STDMETHODIMP HeshunTextService::OnKeyUp(ITfContext*, WPARAM wparam, LPARAM, BOOL* eaten) {
+STDMETHODIMP HeshunTextService::OnKeyUp(ITfContext* context, WPARAM wparam, LPARAM, BOOL* eaten) {
     if (!eaten) return E_INVALIDARG;
     *eaten = FALSE;
     if (wparam == VK_SHIFT) {
         const bool toggle = shift_down_ && !shift_used_with_other_key_;
         shift_down_ = false;
         shift_used_with_other_key_ = false;
-        if (toggle) ToggleAsciiMode();
+        if (toggle) ToggleAsciiMode(context);
         *eaten = TRUE;
     }
     return S_OK;
@@ -350,6 +497,15 @@ HRESULT HeshunTextService::CommitText(ITfContext* context, const char* utf8) {
     if (!context) return E_INVALIDARG;
     std::wstring text = Utf8ToUtf16(utf8);
     if (text.empty()) return S_OK;
+    if (composition_) {
+        auto* edit = new (std::nothrow) CompositionEditSession(this, context,
+            CompositionEditSession::Action::Commit, std::move(text));
+        if (!edit) return E_OUTOFMEMORY;
+        HRESULT session_hr = E_FAIL;
+        const HRESULT hr = context->RequestEditSession(client_id_, edit, TF_ES_ASYNC | TF_ES_READWRITE, &session_hr);
+        edit->Release();
+        return FAILED(hr) ? hr : S_OK;
+    }
     auto* edit = new (std::nothrow) CommitEditSession(context, std::move(text));
     if (!edit) return E_OUTOFMEMORY;
     // A key callback runs while TSF may hold the document lock. Use an
