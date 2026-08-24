@@ -11,6 +11,7 @@ add_library(heshun_tsf SHARED
   src/class_factory.cpp
   src/text_service.cpp
   src/candidate_window.cpp
+  src/heshun_icon.rc
   src/heshun_tsf.def
 )
 
