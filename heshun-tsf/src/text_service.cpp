@@ -327,13 +327,7 @@ STDMETHODIMP HeshunTextService::Deactivate() {
 }
 
 const char* HeshunTextService::ActiveSchemaId() const {
-    ITfInputProcessorProfiles* profiles = nullptr;
-    if (!thread_mgr_ || FAILED(CoCreateInstance(CLSID_TF_InputProcessorProfiles, nullptr,
-        CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&profiles)))) return "zhengma66";
-    LANGID lang = 0; GUID profile{};
-    const HRESULT hr = profiles->GetActiveLanguageProfile(CLSID_HeshunTextService, &lang, &profile);
-    profiles->Release();
-    return SUCCEEDED(hr) && IsEqualGUID(profile, GUID_PROFILE_HESHUN_PINYIN) ? "pinyin_full" : "zhengma66";
+    return pinyin_mode_ ? "pinyin_full" : "zhengma66";
 }
 
 const char* HeshunTextService::ActiveSchemaFile() const {
@@ -510,8 +504,22 @@ void HeshunTextService::ToggleAsciiMode(ITfContext* context) {
     Trace(ascii_mode_ ? "Mode: English" : "Mode: Chinese");
 }
 
+void HeshunTextService::ToggleInputMethod(ITfContext* context) {
+    if (!thread_mgr_) return;
+    if (session_) hs_clear(session_);
+    CancelComposition(context);
+    FreeEngine();
+    pinyin_mode_ = !pinyin_mode_;
+    if (!LoadEngine()) {
+        Trace("Input method switch failed: engine reload failed");
+        return;
+    }
+    Trace(pinyin_mode_ ? "Input method: Pinyin" : "Input method: Zhengma");
+}
+
 bool HeshunTextService::IsHandledKey(WPARAM key) const {
     if (key == VK_SHIFT) return true;
+    if (key == VK_OEM_3 && (GetKeyState(VK_CONTROL) & 0x8000)) return true;
     if (ascii_mode_) return false;
     if (key >= 'A' && key <= 'Z') return true;
     if (key >= 'a' && key <= 'z') return true;
@@ -567,6 +575,11 @@ STDMETHODIMP HeshunTextService::OnKeyDown(ITfContext* context, WPARAM wparam, LP
         shift_down_ = true;
         shift_used_with_other_key_ = false;
         *eaten = TRUE;
+        return S_OK;
+    }
+    if (wparam == VK_OEM_3 && (GetKeyState(VK_CONTROL) & 0x8000)) {
+        *eaten = TRUE;
+        ToggleInputMethod(context);
         return S_OK;
     }
     if (shift_down_) shift_used_with_other_key_ = true;

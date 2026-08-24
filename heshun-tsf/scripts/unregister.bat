@@ -39,4 +39,4 @@ echo [heshun-tsf] DLL: %DLL%
 if exist "%TOOL%" "%TOOL%" unregister
 if exist "%DLL%" regsvr32 /u /s "%DLL%"
 
-echo heshun Zhengma and Pinyin TSF profiles unregistered.
+echo heshun TSF input method and legacy profiles unregistered.

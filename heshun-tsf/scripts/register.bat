@@ -62,4 +62,4 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo heshun Zhengma and Pinyin TSF profiles registered successfully.
+echo heshun TSF input method registered successfully. Use Ctrl+` to switch Zhengma/Pinyin.

@@ -45,6 +45,7 @@ private:
     bool HasPending() const;
     bool IsHandledKey(WPARAM key) const;
     void ToggleAsciiMode(ITfContext* context);
+    void ToggleInputMethod(ITfContext* context);
     void SelectCandidate(ITfContext* context, size_t index);
     void ChangeCandidatePage(int direction);
     bool HasCandidatePage(int offset) const;
@@ -67,6 +68,7 @@ private:
     std::unique_ptr<CandidateWindow> candidate_window_;
     ITfContext* active_context_ = nullptr;
     bool ascii_mode_ = false;
+    bool pinyin_mode_ = false;
     bool shift_down_ = false;
     bool shift_used_with_other_key_ = false;
     int candidate_offset_ = 0;
