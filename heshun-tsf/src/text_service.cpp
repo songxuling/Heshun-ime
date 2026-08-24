@@ -8,6 +8,7 @@
 #include <sstream>
 #include <iomanip>
 #include <vector>
+#include <strsafe.h>
 
 #include "guids.h"
 #include "text_service.h"
@@ -19,6 +20,75 @@ namespace {
 
 void Trace(const std::string& message);
 std::string Hr(HRESULT hr);
+
+class HeshunLangBarItem final : public ITfLangBarItemButton {
+public:
+    explicit HeshunLangBarItem(HeshunTextService* service) : service_(service) {
+        service_->AddRef();
+        InterlockedIncrement(&g_object_count);
+    }
+    ~HeshunLangBarItem() {
+        service_->Release();
+        InterlockedDecrement(&g_object_count);
+    }
+
+    STDMETHODIMP QueryInterface(REFIID riid, void** object) override {
+        if (!object) return E_INVALIDARG;
+        *object = nullptr;
+        if (riid == IID_IUnknown || riid == IID_ITfLangBarItem || riid == IID_ITfLangBarItemButton) {
+            *object = static_cast<ITfLangBarItemButton*>(this);
+            AddRef();
+            return S_OK;
+        }
+        return E_NOINTERFACE;
+    }
+    STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&ref_count_); }
+    STDMETHODIMP_(ULONG) Release() override {
+        const ULONG count = InterlockedDecrement(&ref_count_);
+        if (!count) delete this;
+        return count;
+    }
+    STDMETHODIMP GetInfo(TF_LANGBARITEMINFO* info) override {
+        if (!info) return E_INVALIDARG;
+        ZeroMemory(info, sizeof(*info));
+        info->clsidService = CLSID_HeshunTextService;
+        info->guidItem = GUID_LANGBAR_ITEM_HESHUN;
+        info->dwStyle = TF_LBI_STYLE_BTN_BUTTON;
+        StringCchCopyW(info->szDescription, ARRAYSIZE(info->szDescription), L"heshun");
+        return S_OK;
+    }
+    STDMETHODIMP GetStatus(DWORD* status) override {
+        if (!status) return E_INVALIDARG;
+        *status = 0;
+        return S_OK;
+    }
+    STDMETHODIMP Show(BOOL) override { return S_OK; }
+    STDMETHODIMP GetTooltipString(BSTR* tooltip) override {
+        if (!tooltip) return E_INVALIDARG;
+        *tooltip = SysAllocString(service_->IsPinyinMode() ? L"heshun 全拼 (点击切换郑码)" : L"heshun 郑码 (点击切换全拼)");
+        return *tooltip ? S_OK : E_OUTOFMEMORY;
+    }
+    STDMETHODIMP OnClick(TfLBIClick click, POINT, const RECT*) override {
+        if (click == TF_LBI_CLK_LEFT) service_->ToggleInputMethodFromLangBar();
+        return S_OK;
+    }
+    STDMETHODIMP InitMenu(ITfMenu*) override { return E_NOTIMPL; }
+    STDMETHODIMP OnMenuSelect(UINT) override { return E_NOTIMPL; }
+    STDMETHODIMP GetIcon(HICON* icon) override {
+        if (!icon) return E_INVALIDARG;
+        *icon = LoadIconW(g_module_instance, MAKEINTRESOURCEW(1));
+        return *icon ? S_OK : HRESULT_FROM_WIN32(GetLastError());
+    }
+    STDMETHODIMP GetText(BSTR* text) override {
+        if (!text) return E_INVALIDARG;
+        *text = SysAllocString(service_->IsPinyinMode() ? L"全拼" : L"郑码");
+        return *text ? S_OK : E_OUTOFMEMORY;
+    }
+
+private:
+    LONG ref_count_ = 1;
+    HeshunTextService* service_ = nullptr;
+};
 
 class CommitEditSession final : public ITfEditSession {
 public:
@@ -306,12 +376,30 @@ STDMETHODIMP HeshunTextService::ActivateEx(ITfThreadMgr* thread_mgr, TfClientId 
         hr = keystrokes->AdviseKeyEventSink(client_id_, static_cast<ITfKeyEventSink*>(this), TRUE);
         keystrokes->Release();
     }
-    if (FAILED(hr)) { Trace("ActivateEx: AdviseKeyEventSink failed"); Deactivate(); }
-    else Trace("ActivateEx: key sink advised");
+    if (SUCCEEDED(hr)) {
+        hr = thread_mgr_->QueryInterface(IID_PPV_ARGS(&langbar_mgr_));
+        if (SUCCEEDED(hr)) {
+            auto* item = new (std::nothrow) HeshunLangBarItem(this);
+            if (!item) hr = E_OUTOFMEMORY;
+            else {
+                hr = langbar_mgr_->AddItem(item);
+                if (SUCCEEDED(hr)) langbar_item_ = item;
+                item->Release();
+            }
+        }
+    }
+    if (FAILED(hr)) { Trace("ActivateEx: activation setup failed"); Deactivate(); }
+    else Trace("ActivateEx: key sink and language bar advised");
     return hr;
 }
 
 STDMETHODIMP HeshunTextService::Deactivate() {
+    if (langbar_mgr_) {
+        if (langbar_item_) langbar_mgr_->RemoveItem(langbar_item_);
+        langbar_item_ = nullptr;
+        langbar_mgr_->Release();
+        langbar_mgr_ = nullptr;
+    }
     if (thread_mgr_) {
         ITfKeystrokeMgr* keystrokes = nullptr;
         if (SUCCEEDED(thread_mgr_->QueryInterface(IID_PPV_ARGS(&keystrokes)))) {
@@ -515,6 +603,10 @@ void HeshunTextService::ToggleInputMethod(ITfContext* context) {
         return;
     }
     Trace(pinyin_mode_ ? "Input method: Pinyin" : "Input method: Zhengma");
+}
+
+void HeshunTextService::ToggleInputMethodFromLangBar() {
+    ToggleInputMethod(active_context_);
 }
 
 bool HeshunTextService::IsHandledKey(WPARAM key) const {

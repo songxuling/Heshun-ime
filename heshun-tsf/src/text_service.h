@@ -9,6 +9,8 @@
 class HeshunTextService final : public ITfTextInputProcessorEx, public ITfKeyEventSink {
 public:
     HeshunTextService();
+    void ToggleInputMethodFromLangBar();
+    bool IsPinyinMode() const { return pinyin_mode_; }
 
     // IUnknown
     STDMETHODIMP QueryInterface(REFIID riid, void** object) override;
@@ -65,6 +67,8 @@ private:
     hs_handle* engine_ = nullptr;
     hs_handle* session_ = nullptr;
     ITfComposition* composition_ = nullptr;
+    ITfLangBarItemMgr* langbar_mgr_ = nullptr;
+    ITfLangBarItem* langbar_item_ = nullptr;
     std::unique_ptr<CandidateWindow> candidate_window_;
     ITfContext* active_context_ = nullptr;
     bool ascii_mode_ = false;
