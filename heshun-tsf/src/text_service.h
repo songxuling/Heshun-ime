@@ -38,6 +38,9 @@ private:
     ~HeshunTextService();
 
     bool LoadEngine();
+    const char* ActiveSchemaId() const;
+    const char* ActiveSchemaFile() const;
+    const char* ActiveUserDictFile() const;
     void FreeEngine();
     bool HasPending() const;
     bool IsHandledKey(WPARAM key) const;

@@ -326,10 +326,28 @@ STDMETHODIMP HeshunTextService::Deactivate() {
     return S_OK;
 }
 
+const char* HeshunTextService::ActiveSchemaId() const {
+    ITfInputProcessorProfiles* profiles = nullptr;
+    if (!thread_mgr_ || FAILED(CoCreateInstance(CLSID_TF_InputProcessorProfiles, nullptr,
+        CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&profiles)))) return "zhengma66";
+    LANGID lang = 0; GUID profile{};
+    const HRESULT hr = profiles->GetActiveLanguageProfile(CLSID_HeshunTextService, &lang, &profile);
+    profiles->Release();
+    return SUCCEEDED(hr) && IsEqualGUID(profile, GUID_PROFILE_HESHUN_PINYIN) ? "pinyin_full" : "zhengma66";
+}
+
+const char* HeshunTextService::ActiveSchemaFile() const {
+    return std::strcmp(ActiveSchemaId(), "pinyin_full") == 0 ? "pinyin_full.schema.yaml" : "zhengma66.schema.yaml";
+}
+
+const char* HeshunTextService::ActiveUserDictFile() const {
+    return std::strcmp(ActiveSchemaId(), "pinyin_full") == 0 ? "pinyin_full.userdb.json" : "zhengma66.userdb.json";
+}
+
 bool HeshunTextService::LoadEngine() {
     const std::string directory = ModuleDirectory();
     if (directory.empty()) { Trace("LoadEngine: module directory unavailable"); return false; }
-    const std::string schema = directory + "\\schemas\\zhengma66.schema.yaml";
+    const std::string schema = directory + "\\schemas\\" + ActiveSchemaFile();
     Trace("LoadEngine schema: " + schema);
     engine_ = hs_engine_load_schema(schema.c_str());
     if (!engine_) { Trace("LoadEngine: hs_engine_load_schema returned null"); return false; }
@@ -343,7 +361,7 @@ void HeshunTextService::SaveUserDictionary() {
     if (!engine_) return;
     const std::string directory = ModuleDirectory();
     if (!directory.empty()) {
-        const std::string user_dict = directory + "\\data\\zhengma66.userdb.json";
+        const std::string user_dict = directory + "\\data\\" + ActiveUserDictFile();
         hs_user_dict_save(engine_, user_dict.c_str());
     }
 }
@@ -379,9 +397,15 @@ HRESULT HeshunTextService::UpdateComposition(ITfContext* context) {
         text.empty() ? CompositionEditSession::Action::Cancel : CompositionEditSession::Action::Update, text);
     if (!edit) return E_OUTOFMEMORY;
     HRESULT session_hr = E_FAIL;
-    const HRESULT hr = context->RequestEditSession(client_id_, edit, TF_ES_ASYNC | TF_ES_READWRITE, &session_hr);
+    // Composition state must be updated before the key callback returns. An
+    // async request can remain queued while the host advances or ends the
+    // composition, which loses no-candidate input from the preedit.
+    const HRESULT hr = context->RequestEditSession(client_id_, edit, TF_ES_SYNC | TF_ES_READWRITE, &session_hr);
     edit->Release();
-    return FAILED(hr) ? hr : S_OK;
+    Trace(FAILED(hr) ? "UpdateComposition: sync RequestEditSession failed " + Hr(hr) :
+          FAILED(session_hr) ? "UpdateComposition: sync edit session failed " + Hr(session_hr) :
+                               "UpdateComposition: sync edit session complete");
+    return FAILED(hr) ? hr : session_hr;
 }
 
 HRESULT HeshunTextService::CancelComposition(ITfContext* context) {
@@ -389,9 +413,12 @@ HRESULT HeshunTextService::CancelComposition(ITfContext* context) {
     auto* edit = new (std::nothrow) CompositionEditSession(this, context, CompositionEditSession::Action::Cancel);
     if (!edit) return E_OUTOFMEMORY;
     HRESULT session_hr = E_FAIL;
-    const HRESULT hr = context->RequestEditSession(client_id_, edit, TF_ES_ASYNC | TF_ES_READWRITE, &session_hr);
+    const HRESULT hr = context->RequestEditSession(client_id_, edit, TF_ES_SYNC | TF_ES_READWRITE, &session_hr);
     edit->Release();
-    return FAILED(hr) ? hr : S_OK;
+    Trace(FAILED(hr) ? "CancelComposition: sync RequestEditSession failed " + Hr(hr) :
+          FAILED(session_hr) ? "CancelComposition: sync edit session failed " + Hr(session_hr) :
+                               "CancelComposition: sync edit session complete");
+    return FAILED(hr) ? hr : session_hr;
 }
 
 void HeshunTextService::UpdateCandidateWindow() {
@@ -546,7 +573,16 @@ STDMETHODIMP HeshunTextService::OnKeyDown(ITfContext* context, WPARAM wparam, LP
     if (!IsHandledKey(wparam)) return S_OK;
     Trace("OnKeyDown: handled");
     char* committed = nullptr;
-    if (!FeedKey(wparam, &committed)) { Trace("OnKeyDown: engine rejected key"); return S_OK; }
+    if (!FeedKey(wparam, &committed)) {
+        // The TSF already owns this key in Chinese mode. The engine may reject
+        // an invalid continuation while preserving the previous composition;
+        // never let the rejected letter fall through to the host application.
+        *eaten = TRUE;
+        UpdateComposition(context);
+        UpdateCandidateWindow();
+        Trace("OnKeyDown: engine rejected key; key eaten");
+        return S_OK;
+    }
     *eaten = TRUE;
     if (committed) {
         if (candidate_window_) candidate_window_->Hide();

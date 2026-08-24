@@ -106,7 +106,12 @@ impl PinyinDict {
     pub fn prefix(&self, input: &str) -> Vec<PinyinCandidate> {
         let input = normalize_pinyin(input);
         let lo = self.codes.partition_point(|c| c.as_str() < input.as_str());
-        let hi = lo + self.codes[lo..].partition_point(|c| c.as_str().starts_with(input.as_str()));
+        // `starts_with(input)` is not a monotonic predicate, so it cannot be
+        // used directly with partition_point. Use the lexicographic interval
+        // [input, input + '{') for lowercase ASCII pinyin codes.
+        let mut upper = input.clone();
+        upper.push('{');
+        let hi = self.codes.partition_point(|c| c.as_str() < upper.as_str());
         (lo..hi)
             .map(|i| PinyinCandidate { word: self.word(i).to_string(), weight: self.weights[i] })
             .collect()
@@ -298,6 +303,19 @@ mod tests {
         let p = d.prefix("zhong");
         assert!(!p.is_empty());
         assert!(p.iter().any(|c| c.word == "中"));
+    }
+
+    #[test]
+    fn prefix_lookup_stops_at_next_code() {
+        let d = PinyinDict::from_entries(vec![
+            ("ni".into(), "你".into(), 100),
+            ("nihao".into(), "你好".into(), 100),
+            ("nian".into(), "年".into(), 100),
+            ("nj".into(), "错误边界".into(), 100),
+        ]);
+        let words: Vec<_> = d.prefix("ni").into_iter().map(|c| c.word).collect();
+        assert_eq!(words, vec!["你", "年", "你好"]);
+        assert!(!words.iter().any(|w| *w == "错误边界"));
     }
 
     #[test]

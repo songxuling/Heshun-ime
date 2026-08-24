@@ -503,12 +503,9 @@ impl<'a> Session<'a> {
         }
 
         if exact.is_empty() && prefix.is_empty() {
-            // 双拼下允许中间态：即使当前全拼串无完整候选，仍可能继续输入
-            if zrm.is_some() {
-                return FeedResult::Waiting;
-            }
-            self.buf.pop();
-            return FeedResult::Rejected;
+            // 音码输入始终保留用户输入的字母。当前串没有候选时，
+            // 只隐藏候选窗口，继续允许用户输入、退格或清空修正。
+            return FeedResult::Waiting;
         }
 
         // 运行 DP 组句获取整句候选
@@ -756,13 +753,14 @@ user_dict:
     }
 
     #[test]
-    fn script_invalid_key_rejected() {
+    fn script_unmatched_input_is_retained() {
         let e = script_engine();
         let mut s = e.session();
         s.feed('w'); // "w" 是 "wo" 前缀，有效
         assert_eq!(s.pending(), "w");
-        assert_eq!(s.feed('x'), FeedResult::Rejected); // "wx" 无候选
-        assert_eq!(s.pending(), "w"); // 已回退
+        assert_eq!(s.feed('x'), FeedResult::Waiting); // 无候选也应保留输入
+        assert_eq!(s.pending(), "wx");
+        assert!(s.candidates(9).is_empty());
     }
 
     #[test]

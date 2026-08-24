@@ -62,4 +62,4 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo heshun Zhengma TSF registered successfully.
+echo heshun Zhengma and Pinyin TSF profiles registered successfully.

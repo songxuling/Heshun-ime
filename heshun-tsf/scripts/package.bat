@@ -21,6 +21,10 @@ if not exist "%BIN%\schemas\zhengma66.schema.yaml" (
   echo Schema directory is incomplete: %BIN%\schemas
   exit /b 1
 )
+if not exist "%BIN%\schemas\pinyin_full.schema.yaml" (
+  echo Schema directory is incomplete: %BIN%\schemas
+  exit /b 1
+)
 
 rmdir /s /q "%DIST%" 2>nul
 mkdir "%DIST%\schemas" || exit /b 1

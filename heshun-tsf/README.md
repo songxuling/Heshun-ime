@@ -4,15 +4,15 @@ Windows TSF (Text Services Framework) shell for the `heshun` Rust input-method e
 
 ## Scope of the current minimal implementation
 
-- Registers a COM `ITfTextInputProcessorEx` text service named **heshun 郑码**.
+- Registers a COM `ITfTextInputProcessorEx` text service with **heshun 郑码** and **heshun 全拼** profiles.
 - Intercepts `a-z`, Backspace, Escape, Space, and `1-9` through `ITfKeyEventSink`.
-- Loads `schemas/zhengma66.schema.yaml` through the Rust C ABI.
+- Loads the active profile's `zhengma66.schema.yaml` or `pinyin_full.schema.yaml` through the Rust C ABI.
 - Commits returned text into the focused application through an asynchronous TSF edit session.
 - Shows a native non-activating candidate window; Composition/preedit underline remains deferred.
 
 ## Current behavior
 
-- System-wide Zhengma input in TSF-aware Windows applications.
+- System-wide Zhengma and full Pinyin input in TSF-aware Windows applications.
 - Native non-activating candidate window showing the pending code and candidates; Space chooses the first candidate and `1-9` choose by number.
 - Backspace edits the pending code while one exists, then returns to the host application to delete committed text once the pending code is empty.
 - Escape clears pending code. `Delete` remains owned by the host application.
@@ -54,7 +54,7 @@ scripts\register.bat build-tsf\bin\heshun_tsf.dll
 scripts\unregister.bat build-tsf\bin\heshun_tsf.dll
 ```
 
-The TSF profile API writes system CTF configuration and requires elevation. The scripts register COM, then register or remove the TSF language profile. Do not use `regsvr32` alone for installation: that only registers the COM server, not the keyboard profile.
+The TSF profile API writes system CTF configuration and requires elevation. The scripts register COM, then register or remove both TSF language profiles. Do not use `regsvr32` alone for installation: that only registers the COM server, not the keyboard profiles.
 
 ## Test
 

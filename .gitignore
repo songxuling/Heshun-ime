@@ -1,27 +1,5 @@
 # CMake build output
-/build-tsf/
-/build-tsf-next/
-/build-tsf-input-debug/
-/build-tsf-async-debug/
-/build-tsf-selection-debug/
-/build-tsf-candidates-debug/
-/build-tsf-backspace-debug/
-/build-tsf-release-candidate/
-/build-tsf-ascii-debug/
-/build-tsf-log-debug/
-/build-tsf-pagination-verify/
-/build-tsf-pagination-space-verify/
-/build-tsf-pagination-boundary-verify/
-/build-tsf-highlight-verify/
-/build-tsf-highlight-nav-verify/
-/build-tsf-highlight-nav-persist-verify/
-/build-tsf-highlight-nav-select-verify/
-/build-tsf-highlight-nav-select-state-verify/
-/build-tsf-selection-diagnose/
-/build-tsf-dpi-boundary-verify/
-/build-tsf-mouse-verify/
-/build-tsf-composition-verify/
-/build-tsf-composition-debug/
+/build-tsf*/
 /heshun-tsf/dist/
 
 # Rust build output
