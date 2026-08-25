@@ -199,6 +199,19 @@ private:
         hr = composition->GetRange(&range);
         if (SUCCEEDED(hr)) {
             hr = range->SetText(ec, 0, text_.c_str(), static_cast<LONG>(text_.size()));
+            if (SUCCEEDED(hr) && service_->display_attribute_atom() != TF_INVALID_GUIDATOM) {
+                ITfProperty* attribute = nullptr;
+                hr = context_->GetProperty(GUID_PROP_ATTRIBUTE, &attribute);
+                if (SUCCEEDED(hr)) {
+                    VARIANT value;
+                    VariantInit(&value);
+                    value.vt = VT_I4;
+                    value.lVal = static_cast<LONG>(service_->display_attribute_atom());
+                    hr = attribute->SetValue(ec, range, &value);
+                    VariantClear(&value);
+                    attribute->Release();
+                }
+            }
             range->Release();
         }
         Trace(FAILED(hr) ? "Composition: update failed " + Hr(hr) : "Composition: updated");
@@ -253,6 +266,17 @@ std::wstring Utf8ToUtf16(const char* value) {
     std::wstring result(static_cast<size_t>(needed), L'\0');
     if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value, length, result.data(), needed)) return {};
     return result;
+}
+
+std::wstring Utf8ViewToUtf16(hs_text_view view) {
+    if (!view.ptr || !view.len) return {};
+    std::string value(reinterpret_cast<const char*>(view.ptr), view.len);
+    return Utf8ToUtf16(value.c_str());
+}
+
+std::string Utf8ViewToString(hs_text_view view) {
+    if (!view.ptr || !view.len) return {};
+    return std::string(reinterpret_cast<const char*>(view.ptr), view.len);
 }
 
 std::vector<std::wstring> ParseCandidateWords(const char* value) {
@@ -343,6 +367,8 @@ STDMETHODIMP HeshunTextService::QueryInterface(REFIID riid, void** object) {
         *object = static_cast<ITfTextInputProcessorEx*>(this);
     } else if (riid == IID_ITfKeyEventSink) {
         *object = static_cast<ITfKeyEventSink*>(this);
+    } else if (riid == IID_ITfDisplayAttributeProvider) {
+        *object = static_cast<ITfDisplayAttributeProvider*>(this);
     } else {
         return E_NOINTERFACE;
     }
@@ -370,8 +396,22 @@ STDMETHODIMP HeshunTextService::ActivateEx(ITfThreadMgr* thread_mgr, TfClientId 
     if (!LoadEngine()) { Trace("ActivateEx: heshun engine/schema load failed"); Deactivate(); return E_FAIL; }
     Trace("ActivateEx: engine loaded");
 
+    HRESULT hr = E_FAIL;
+    ITfCategoryMgr* categories = nullptr;
+    hr = CoCreateInstance(CLSID_TF_CategoryMgr, nullptr, CLSCTX_INPROC_SERVER,
+                           IID_PPV_ARGS(&categories));
+    if (SUCCEEDED(hr)) {
+        hr = categories->RegisterGUID(GUID_DISPLAYATTRIBUTE_HESHUN_PREEDIT,
+                                      &display_attribute_atom_);
+        categories->Release();
+    }
+    if (FAILED(hr)) {
+        Trace("ActivateEx: display attribute atom unavailable " + Hr(hr));
+        display_attribute_atom_ = TF_INVALID_GUIDATOM;
+    }
+
     ITfKeystrokeMgr* keystrokes = nullptr;
-    HRESULT hr = thread_mgr_->QueryInterface(IID_PPV_ARGS(&keystrokes));
+    hr = thread_mgr_->QueryInterface(IID_PPV_ARGS(&keystrokes));
     if (SUCCEEDED(hr)) {
         hr = keystrokes->AdviseKeyEventSink(client_id_, static_cast<ITfKeyEventSink*>(this), TRUE);
         keystrokes->Release();
@@ -431,20 +471,70 @@ bool HeshunTextService::LoadEngine() {
     if (directory.empty()) { Trace("LoadEngine: module directory unavailable"); return false; }
     const std::string schema = directory + "\\schemas\\" + ActiveSchemaFile();
     Trace("LoadEngine schema: " + schema);
-    engine_ = hs_engine_load_schema(schema.c_str());
-    if (!engine_) { Trace("LoadEngine: hs_engine_load_schema returned null"); return false; }
-    session_ = hs_session_new(engine_);
-    if (!session_) Trace("LoadEngine: hs_session_new returned null");
-    if (session_) hs_set_ascii_mode(session_, ascii_mode_ ? 1 : 0);
-    return session_ != nullptr;
+    runtime_ = hs_runtime_new_schema(schema.c_str());
+    if (!runtime_) { Trace("LoadEngine: hs_runtime_new_schema returned null"); return false; }
+    pending_.clear();
+    candidates_.clear();
+    page_index_ = 0;
+    total_candidates_ = 0;
+    has_selected_key_ = false;
+    return true;
+}
+
+bool HeshunTextService::DispatchRuntime(unsigned int opcode, long long value, CandidateKey key) {
+    if (!runtime_) return false;
+    hs_runtime_event_t event{};
+    event.opcode = opcode;
+    event.value = value;
+    event.source = key.source;
+    event.ordinal = key.ordinal;
+    hs_handle* result = hs_runtime_event(runtime_, &event);
+    if (!result) return false;
+    const hs_runtime_result* view = hs_runtime_result_view(result);
+    if (!view) { hs_runtime_result_free(result); return false; }
+
+    last_committed_ = Utf8ViewToString(view->committed);
+    pending_ = Utf8ViewToUtf16(view->pending);
+    candidates_.clear();
+    for (unsigned int i = 0; i < view->candidate_count; ++i) {
+        const hs_candidate_view& candidate = view->candidates[i];
+        candidates_.push_back(RuntimeCandidate{
+            CandidateKey{candidate.source, candidate.ordinal},
+            Utf8ViewToUtf16(candidate.word),
+            Utf8ViewToUtf16(candidate.annotation),
+            Utf8ViewToUtf16(candidate.label),
+        });
+    }
+    page_index_ = view->page_index;
+    page_size_ = view->page_size;
+    total_candidates_ = view->total_candidates;
+    has_previous_page_ = view->has_previous != 0;
+    has_next_page_ = view->has_next != 0;
+    has_selected_key_ = view->selected_source != 0;
+    selected_key_ = CandidateKey{view->selected_source, view->selected_ordinal};
+    ascii_mode_ = view->ascii_mode != 0;
+    const bool consumed = view->disposition != 0;
+    std::ostringstream event_log;
+    event_log << "RuntimeEvent: profile=heshun opcode=" << opcode
+              << " disposition=" << view->disposition
+              << " composition=" << view->composition
+              << " pending_len=" << view->pending.len
+              << " candidates=" << view->candidate_count
+              << " page=" << view->page_index << "/" << view->page_size
+              << " total=" << view->total_candidates
+              << " selected=" << view->selected_source << ":" << view->selected_ordinal
+              << " committed_len=" << view->committed.len;
+    Trace(event_log.str());
+    hs_runtime_result_free(result);
+    return consumed;
 }
 
 void HeshunTextService::SaveUserDictionary() {
-    if (!engine_) return;
+    if (!runtime_) return;
     const std::string directory = ModuleDirectory();
     if (!directory.empty()) {
         const std::string user_dict = directory + "\\data\\" + ActiveUserDictFile();
-        hs_user_dict_save(engine_, user_dict.c_str());
+        hs_runtime_user_dict_save(runtime_, user_dict.c_str());
     }
 }
 
@@ -463,18 +553,25 @@ void HeshunTextService::ClearComposition() {
 }
 
 void HeshunTextService::FreeEngine() {
+    if (active_context_ && composition_) {
+        const HRESULT cancel_hr = CancelComposition(active_context_);
+        Trace(FAILED(cancel_hr) ? "FreeEngine: composition cancel failed " + Hr(cancel_hr)
+                                : "FreeEngine: composition cancelled");
+    }
     ClearComposition();
     if (active_context_) { active_context_->Release(); active_context_ = nullptr; }
     if (candidate_window_) candidate_window_->Hide();
-    if (session_) { hs_session_free(session_); session_ = nullptr; }
-    if (engine_) { hs_engine_free(engine_); engine_ = nullptr; }
+    if (runtime_) { hs_runtime_free(runtime_); runtime_ = nullptr; }
+    pending_.clear();
+    candidates_.clear();
+    page_index_ = 0;
+    total_candidates_ = 0;
+    has_selected_key_ = false;
 }
 
 HRESULT HeshunTextService::UpdateComposition(ITfContext* context) {
-    if (!context || !session_) return E_INVALIDARG;
-    char* pending = hs_pending(session_);
-    const std::wstring text = pending ? Utf8ToUtf16(pending) : L"";
-    if (pending) hs_str_free(pending);
+    if (!context || !runtime_) return E_INVALIDARG;
+    const std::wstring text = pending_;
     auto* edit = new (std::nothrow) CompositionEditSession(this, context,
         text.empty() ? CompositionEditSession::Action::Cancel : CompositionEditSession::Action::Update, text);
     if (!edit) return E_OUTOFMEMORY;
@@ -504,89 +601,55 @@ HRESULT HeshunTextService::CancelComposition(ITfContext* context) {
 }
 
 void HeshunTextService::UpdateCandidateWindow() {
-    if (!session_) return;
-    char* pending_raw = hs_pending(session_);
-    char* candidates_raw = hs_candidates_page(session_, candidate_offset_, 9);
-    std::wstring pending = pending_raw ? Utf8ToUtf16(pending_raw) : L"";
-    std::vector<std::wstring> candidates = ParseCandidateWords(candidates_raw);
-    if (pending_raw) hs_str_free(pending_raw);
-    if (candidates_raw) hs_str_free(candidates_raw);
-
-    if (pending.empty() || candidates.empty()) {
+    if (!runtime_ || pending_.empty() || candidates_.empty()) {
         if (candidate_window_) candidate_window_->Hide();
         Trace("CandidateWindow: hidden");
         return;
     }
+    std::vector<std::wstring> candidates;
+    std::vector<CandidateKey> keys;
+    for (const auto& candidate : candidates_) {
+        std::wstring display = candidate.word;
+        if (!candidate.annotation.empty()) display += L"  [" + candidate.annotation + L"]";
+        candidates.push_back(std::move(display));
+        keys.push_back(candidate.key);
+    }
     if (!candidate_window_) {
         candidate_window_ = std::make_unique<CandidateWindow>();
-        candidate_window_->SetCandidateClickHandler([this](size_t index) {
-            SelectCandidate(active_context_, index);
+        candidate_window_->SetCandidateClickHandler([this](CandidateKey key) {
+            SelectCandidate(active_context_, key);
         });
     }
-    candidate_window_->Show(std::move(pending), std::move(candidates));
+    candidate_window_->Show(pending_, std::move(candidates), std::move(keys), page_index_, page_size_, total_candidates_);
     Trace("CandidateWindow: shown");
 }
 
-bool HeshunTextService::HasCandidatePage(int offset) const {
-    if (!session_ || offset < 0) return false;
-    char* page = hs_candidates_page(session_, offset, 1);
-    const bool exists = page && *page;
-    if (page) hs_str_free(page);
-    return exists;
-}
-
 void HeshunTextService::ChangeCandidatePage(int direction) {
-    if (!session_ || !HasPending()) return;
-    const int next = std::max(0, candidate_offset_ + direction * 9);
-    if (next != candidate_offset_ && !HasCandidatePage(next)) {
-        Trace(direction > 0 ? "CandidateWindow: next page unavailable" : "CandidateWindow: already first page");
-        return;
-    }
-    candidate_offset_ = next;
-    UpdateCandidateWindow();
-    std::ostringstream out;
-    out << (direction > 0 ? "CandidateWindow: next page offset=" : "CandidateWindow: previous page offset=") << candidate_offset_;
-    Trace(out.str());
-}
-
-int HeshunTextService::SelectedCandidateIndex() const {
-    const size_t row = candidate_window_ ? candidate_window_->selected_index() : 0;
-    return candidate_offset_ + static_cast<int>(row) + 1;
+    DispatchRuntime(8, direction);
 }
 
 void HeshunTextService::TraceSelectionKey(WPARAM key) const {
     std::ostringstream out;
     out << "CandidateWindow: select key=" << (key == VK_RETURN ? "Enter" : "Space")
-        << " index=" << SelectedCandidateIndex()
+        << " ordinal=" << (has_selected_key_ ? selected_key_.ordinal : 0)
         << " keyboard=" << (candidate_window_ && candidate_window_->keyboard_selection() ? "true" : "false");
     Trace(out.str());
 }
 
-void HeshunTextService::SelectCandidate(ITfContext* context, size_t index) {
-    if (!context || !session_) return;
-    const int candidate_index = candidate_offset_ + static_cast<int>(index) + 1;
-    char* committed = hs_select(session_, candidate_index);
-    if (!committed) return;
+void HeshunTextService::SelectCandidate(ITfContext* context, CandidateKey key) {
+    if (!context || !runtime_ || !DispatchRuntime(6, 0, key) || last_committed_.empty()) return;
     if (candidate_window_) candidate_window_->Hide();
-    CommitText(context, committed);
-    hs_str_free(committed);
+    CommitText(context, last_committed_.c_str());
     Trace("CandidateWindow: mouse candidate selected");
 }
 
 bool HeshunTextService::HasPending() const {
-    if (!session_) return false;
-    char* pending = hs_pending(session_);
-    const bool has_pending = pending && *pending;
-    if (pending) hs_str_free(pending);
-    return has_pending;
+    return !pending_.empty();
 }
 
 void HeshunTextService::ToggleAsciiMode(ITfContext* context) {
     ascii_mode_ = !ascii_mode_;
-    if (session_) {
-        hs_clear(session_);
-        hs_set_ascii_mode(session_, ascii_mode_ ? 1 : 0);
-    }
+    DispatchRuntime(9);
     CancelComposition(context);
     if (candidate_window_) candidate_window_->Hide();
     Trace(ascii_mode_ ? "Mode: English" : "Mode: Chinese");
@@ -594,7 +657,6 @@ void HeshunTextService::ToggleAsciiMode(ITfContext* context) {
 
 void HeshunTextService::ToggleInputMethod(ITfContext* context) {
     if (!thread_mgr_) return;
-    if (session_) hs_clear(session_);
     CancelComposition(context);
     FreeEngine();
     pinyin_mode_ = !pinyin_mode_;
@@ -620,34 +682,54 @@ bool HeshunTextService::IsHandledKey(WPARAM key) const {
     return key >= '1' && key <= '9';
 }
 
-bool HeshunTextService::FeedKey(WPARAM key, char** committed) {
-    if (!session_) return false;
-    *committed = nullptr;
-    if (key >= 'A' && key <= 'Z') { candidate_offset_ = 0; return hs_feed(session_, static_cast<char>(key - 'A' + 'a'), committed) != 0; }
-    if (key >= 'a' && key <= 'z') { candidate_offset_ = 0; return hs_feed(session_, static_cast<char>(key), committed) != 0; }
-    if (key == VK_BACK) { hs_backspace(session_); candidate_offset_ = 0; return true; }
-    if (key == VK_ESCAPE) { hs_clear(session_); candidate_offset_ = 0; return true; }
+bool HeshunTextService::FeedKey(WPARAM key, std::string& committed) {
+    committed.clear();
+    if (!runtime_) return false;
+    if (key >= 'A' && key <= 'Z') { const bool consumed = DispatchRuntime(0, static_cast<long long>(key - 'A' + 'a')); committed = last_committed_; return consumed; }
+    if (key >= 'a' && key <= 'z') { const bool consumed = DispatchRuntime(0, static_cast<long long>(key)); committed = last_committed_; return consumed; }
+    if (key == VK_BACK) return DispatchRuntime(1);
+    if (key == VK_ESCAPE) return DispatchRuntime(3);
     if (key == VK_PRIOR || key == VK_NEXT) { ChangeCandidatePage(key == VK_NEXT ? 1 : -1); return true; }
     if (key == VK_UP || key == VK_DOWN) {
-        if (candidate_window_) {
-            candidate_window_->MoveSelection(key == VK_DOWN ? 1 : -1);
-            candidate_window_->UseKeyboardSelection();
-        }
+        DispatchRuntime(7, key == VK_DOWN ? 1 : -1);
+        if (candidate_window_) { candidate_window_->MoveSelection(key == VK_DOWN ? 1 : -1); candidate_window_->UseKeyboardSelection(); }
         Trace(key == VK_DOWN ? "CandidateWindow: selection down" : "CandidateWindow: selection up");
         return true;
     }
     if (key == VK_RETURN || key == VK_SPACE) {
         TraceSelectionKey(key);
-        *committed = hs_select(session_, SelectedCandidateIndex());
-        if (*committed) Trace(std::string("CandidateWindow: selected text=") + *committed);
-        candidate_offset_ = 0;
+        DispatchRuntime(key == VK_RETURN ? 5 : 4);
+        committed = last_committed_;
+        if (!committed.empty()) Trace(std::string("CandidateWindow: selected text=") + committed);
         return true;
     }
-    if (key >= '1' && key <= '9') { *committed = hs_select(session_, candidate_offset_ + static_cast<int>(key - '0')); candidate_offset_ = 0; return true; }
+    if (key >= '1' && key <= '9') {
+        const size_t row = static_cast<size_t>(key - '1');
+        if (row < candidates_.size()) DispatchRuntime(6, 0, candidates_[row].key);
+        committed = last_committed_;
+        return true;
+    }
     return false;
 }
 
-STDMETHODIMP HeshunTextService::OnSetFocus(BOOL) { return S_OK; }
+STDMETHODIMP HeshunTextService::OnSetFocus(BOOL foreground) {
+    if (foreground) return S_OK;
+
+    // A TSF context can disappear while the service still owns its last
+    // reference. End the composition and reset the owned runtime before the
+    // old context is released; otherwise a later host can inherit stale
+    // preedit/candidates or receive a commit targeted at the wrong document.
+    if (active_context_) {
+        const HRESULT cancel_hr = CancelComposition(active_context_);
+        Trace(FAILED(cancel_hr) ? "FocusLost: composition cancel failed " + Hr(cancel_hr)
+                                : "FocusLost: composition cancelled");
+        DispatchRuntime(12);
+        if (candidate_window_) candidate_window_->Hide();
+        active_context_->Release();
+        active_context_ = nullptr;
+    }
+    return S_OK;
+}
 STDMETHODIMP HeshunTextService::OnTestKeyDown(ITfContext*, WPARAM wparam, LPARAM, BOOL* eaten) {
     if (!eaten) return E_INVALIDARG;
     *eaten = IsHandledKey(wparam) ? TRUE : FALSE;
@@ -658,9 +740,18 @@ STDMETHODIMP HeshunTextService::OnTestKeyDown(ITfContext*, WPARAM wparam, LPARAM
 STDMETHODIMP HeshunTextService::OnKeyDown(ITfContext* context, WPARAM wparam, LPARAM, BOOL* eaten) {
     if (!eaten) return E_INVALIDARG;
     if (context && context != active_context_) {
-        if (active_context_) active_context_->Release();
+        if (active_context_) {
+            const HRESULT cancel_hr = CancelComposition(active_context_);
+            Trace(FAILED(cancel_hr) ? "ContextChanged: composition cancel failed " + Hr(cancel_hr)
+                                    : "ContextChanged: composition cancelled");
+            DispatchRuntime(12);
+            if (candidate_window_) candidate_window_->Hide();
+            active_context_->Release();
+            active_context_ = nullptr;
+        }
         active_context_ = context;
         active_context_->AddRef();
+        Trace("ContextChanged: active context replaced");
     }
     *eaten = FALSE;
     if (wparam == VK_SHIFT) {
@@ -677,8 +768,8 @@ STDMETHODIMP HeshunTextService::OnKeyDown(ITfContext* context, WPARAM wparam, LP
     if (shift_down_) shift_used_with_other_key_ = true;
     if (!IsHandledKey(wparam)) return S_OK;
     Trace("OnKeyDown: handled");
-    char* committed = nullptr;
-    if (!FeedKey(wparam, &committed)) {
+    std::string committed;
+    if (!FeedKey(wparam, committed)) {
         // The TSF already owns this key in Chinese mode. The engine may reject
         // an invalid continuation while preserving the previous composition;
         // never let the rejected letter fall through to the host application.
@@ -689,11 +780,10 @@ STDMETHODIMP HeshunTextService::OnKeyDown(ITfContext* context, WPARAM wparam, LP
         return S_OK;
     }
     *eaten = TRUE;
-    if (committed) {
+    if (!committed.empty()) {
         if (candidate_window_) candidate_window_->Hide();
         Trace("OnKeyDown: committing engine result");
-        const HRESULT hr = CommitText(context, committed);
-        hs_str_free(committed);
+        const HRESULT hr = CommitText(context, committed.c_str());
         Trace(FAILED(hr) ? "OnKeyDown: CommitText failed" : "OnKeyDown: CommitText succeeded");
         return hr;
     }
@@ -726,6 +816,20 @@ STDMETHODIMP HeshunTextService::OnPreservedKey(ITfContext*, REFGUID, BOOL* eaten
     return S_OK;
 }
 
+STDMETHODIMP HeshunTextService::EnumDisplayAttributeInfo(IEnumTfDisplayAttributeInfo** result) {
+    return CreateHeshunDisplayAttributeEnum(result);
+}
+
+STDMETHODIMP HeshunTextService::GetDisplayAttributeInfo(REFGUID guid, ITfDisplayAttributeInfo** result) {
+    if (!result) return E_INVALIDARG;
+    *result = nullptr;
+    if (guid != GUID_DISPLAYATTRIBUTE_HESHUN_PREEDIT) return E_INVALIDARG;
+    auto* info = new (std::nothrow) HeshunDisplayAttributeInfo();
+    if (!info) return E_OUTOFMEMORY;
+    *result = info;
+    return S_OK;
+}
+
 HRESULT HeshunTextService::CommitText(ITfContext* context, const char* utf8) {
     if (!context) return E_INVALIDARG;
     std::wstring text = Utf8ToUtf16(utf8);
@@ -737,6 +841,10 @@ HRESULT HeshunTextService::CommitText(ITfContext* context, const char* utf8) {
         HRESULT session_hr = E_FAIL;
         const HRESULT hr = context->RequestEditSession(client_id_, edit, TF_ES_ASYNC | TF_ES_READWRITE, &session_hr);
         edit->Release();
+        Trace(FAILED(hr) ? "CommitText: composition RequestEditSession failed " + Hr(hr) :
+              session_hr == TF_S_ASYNC ? "CommitText: composition edit session queued" :
+              FAILED(session_hr) ? "CommitText: composition edit session failed " + Hr(session_hr) :
+                                   "CommitText: composition edit session complete");
         return FAILED(hr) ? hr : S_OK;
     }
     auto* edit = new (std::nothrow) CommitEditSession(context, std::move(text));

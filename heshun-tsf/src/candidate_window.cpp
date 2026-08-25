@@ -56,10 +56,14 @@ bool CandidateWindow::EnsureWindow() {
     return window_ != nullptr;
 }
 
-void CandidateWindow::Show(std::wstring pending, std::vector<std::wstring> candidates) {
-    const bool content_changed = pending_ != pending || candidates_ != candidates;
+void CandidateWindow::Show(std::wstring pending, std::vector<std::wstring> candidates, std::vector<CandidateKey> keys, unsigned int page_index, unsigned int page_size, unsigned int total) {
+    const bool content_changed = pending_ != pending || candidates_ != candidates || keys_ != keys;
     pending_ = std::move(pending);
     candidates_ = std::move(candidates);
+    keys_ = std::move(keys);
+    page_index_ = page_index;
+    page_size_ = page_size ? page_size : 9;
+    total_candidates_ = total;
     if (content_changed) {
         selected_index_ = 0;
         keyboard_selection_ = false;
@@ -105,7 +109,7 @@ void CandidateWindow::Show(std::wstring pending, std::vector<std::wstring> candi
     UpdateWindow(window_);
 }
 
-void CandidateWindow::SetCandidateClickHandler(std::function<void(size_t)> handler) {
+void CandidateWindow::SetCandidateClickHandler(std::function<void(CandidateKey)> handler) {
     candidate_click_handler_ = std::move(handler);
 }
 
@@ -125,6 +129,9 @@ void CandidateWindow::Hide() {
     if (window_) ShowWindow(window_, SW_HIDE);
     pending_.clear();
     candidates_.clear();
+    keys_.clear();
+    page_index_ = 0;
+    total_candidates_ = 0;
     selected_index_ = 0;
     keyboard_selection_ = false;
 }
@@ -159,7 +166,9 @@ void CandidateWindow::Paint(HDC dc) {
     line.top += padding;
     line.right -= padding;
     line.bottom = line.top + header;
-    std::wstring title = L"编码: " + pending_;
+    const unsigned int page_count = page_size_ ? (total_candidates_ + page_size_ - 1) / page_size_ : 0;
+    std::wstring title = L"编码: " + pending_ + L"  " + std::to_wstring(page_index_ + 1) +
+                         L"/" + std::to_wstring(page_count);
     DrawTextW(dc, title.c_str(), -1, &line, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
 
     line.top += header;
@@ -220,7 +229,7 @@ LRESULT CALLBACK CandidateWindow::WindowProc(HWND window, UINT message, WPARAM w
     case WM_LBUTTONUP: {
         const size_t index = self->RowAtY(GET_Y_LPARAM(lparam));
         if (index != self->candidates_.size() && self->candidate_click_handler_) {
-            self->candidate_click_handler_(index);
+            if (index < self->keys_.size()) self->candidate_click_handler_(self->keys_[index]);
         }
         return 0;
     }

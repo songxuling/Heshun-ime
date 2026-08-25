@@ -191,6 +191,13 @@ impl CoreRuntime {
         engine.save_user_dict()
     }
 
+    pub fn save_user_dict_to(&self, path: &std::path::Path) -> Result<(), String> {
+        let Some(engine) = self.store.get(&self.state.schema) else {
+            return Err(format!("unknown schema: {}", self.state.schema));
+        };
+        engine.save_user_dict_to(path)
+    }
+
     pub fn dispatch(&mut self, event: InputEvent) -> CommandResult {
         let mut committed = None;
         let mut error = None;

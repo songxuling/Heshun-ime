@@ -113,6 +113,12 @@ impl Engine {
     /// 保存当前用户词典；未启用用户词典时是成功的空操作。
     pub fn save_user_dict(&self) -> Result<(), String> {
         let Some(path) = self.user_dict_path() else { return Ok(()) };
+        self.save_user_dict_to(path)
+    }
+
+    /// Save the current user dictionary to an explicit path supplied by a
+    /// platform shell.
+    pub fn save_user_dict_to(&self, path: &Path) -> Result<(), String> {
         let borrowed = self.user_dict.borrow();
         let Some(dict) = borrowed.as_ref() else { return Ok(()) };
         dict.save(path).map_err(|e| format!("保存用户词典 {} 失败: {e}", path.display()))

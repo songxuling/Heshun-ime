@@ -55,6 +55,7 @@ void hs_runtime_free(hs_handle* runtime);
 hs_handle* hs_runtime_event(hs_handle* runtime, const hs_runtime_event_t* event);
 const hs_runtime_result* hs_runtime_result_view(const hs_handle* result);
 void hs_runtime_result_free(hs_handle* result);
+int hs_runtime_user_dict_save(hs_handle* runtime, const char* path);
 
 /* 生命周期 */
 hs_handle* hs_engine_load(const char* bin_path);     /* 失败 NULL */

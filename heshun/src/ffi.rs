@@ -167,6 +167,14 @@ pub extern "C" fn hs_runtime_result_free(result: *mut c_void) {
     if !result.is_null() { drop(unsafe { Box::from_raw(result as *mut RuntimeResultOwner) }); }
 }
 
+#[no_mangle]
+pub extern "C" fn hs_runtime_user_dict_save(runtime: *mut c_void, path: *const c_char) -> i32 {
+    if runtime.is_null() { return 0; }
+    let Some(path) = cstr(path) else { return 0 };
+    let handle = unsafe { &*(runtime as *const RuntimeHandle) };
+    handle.runtime.save_user_dict_to(std::path::Path::new(path)).map(|_| 1).unwrap_or(0)
+}
+
 /// 从二进制码表文件加载引擎。自动识别 ZMD1(形码) / ZPY1(音码)。失败返回 NULL。
 #[no_mangle]
 pub extern "C" fn hs_engine_load(path: *const c_char) -> *mut c_void {

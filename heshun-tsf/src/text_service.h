@@ -3,10 +3,14 @@
 #include <windows.h>
 #include <msctf.h>
 #include <memory>
+#include <string>
 #include "heshun.h"
 #include "candidate_window.h"
+#include "display_attributes.h"
 
-class HeshunTextService final : public ITfTextInputProcessorEx, public ITfKeyEventSink {
+class HeshunTextService final : public ITfTextInputProcessorEx,
+                                public ITfKeyEventSink,
+                                public ITfDisplayAttributeProvider {
 public:
     HeshunTextService();
     void ToggleInputMethodFromLangBar();
@@ -32,7 +36,12 @@ public:
     STDMETHODIMP OnKeyUp(ITfContext* context, WPARAM wparam, LPARAM lparam, BOOL* eaten) override;
     STDMETHODIMP OnPreservedKey(ITfContext* context, REFGUID guid, BOOL* eaten) override;
 
+    // ITfDisplayAttributeProvider
+    STDMETHODIMP EnumDisplayAttributeInfo(IEnumTfDisplayAttributeInfo** result) override;
+    STDMETHODIMP GetDisplayAttributeInfo(REFGUID guid, ITfDisplayAttributeInfo** result) override;
+
     ITfComposition* composition() const { return composition_; }
+    TfGuidAtom display_attribute_atom() const { return display_attribute_atom_; }
     void SetComposition(ITfComposition* composition);
     void ClearComposition();
 
@@ -48,12 +57,11 @@ private:
     bool IsHandledKey(WPARAM key) const;
     void ToggleAsciiMode(ITfContext* context);
     void ToggleInputMethod(ITfContext* context);
-    void SelectCandidate(ITfContext* context, size_t index);
+    void SelectCandidate(ITfContext* context, CandidateKey key);
     void ChangeCandidatePage(int direction);
-    bool HasCandidatePage(int offset) const;
-    int SelectedCandidateIndex() const;
+    bool DispatchRuntime(unsigned int opcode, long long value = 0, CandidateKey key = {});
     void TraceSelectionKey(WPARAM key) const;
-    bool FeedKey(WPARAM key, char** committed);
+    bool FeedKey(WPARAM key, std::string& committed);
     HRESULT CommitText(ITfContext* context, const char* utf8);
     HRESULT UpdateComposition(ITfContext* context);
     HRESULT CancelComposition(ITfContext* context);
@@ -64,8 +72,7 @@ private:
     ITfThreadMgr* thread_mgr_ = nullptr;
     TfClientId client_id_ = TF_CLIENTID_NULL;
     DWORD key_sink_cookie_ = TF_INVALID_COOKIE;
-    hs_handle* engine_ = nullptr;
-    hs_handle* session_ = nullptr;
+    hs_handle* runtime_ = nullptr;
     ITfComposition* composition_ = nullptr;
     ITfLangBarItemMgr* langbar_mgr_ = nullptr;
     ITfLangBarItem* langbar_item_ = nullptr;
@@ -75,7 +82,23 @@ private:
     bool pinyin_mode_ = false;
     bool shift_down_ = false;
     bool shift_used_with_other_key_ = false;
-    int candidate_offset_ = 0;
+    struct RuntimeCandidate {
+        CandidateKey key;
+        std::wstring word;
+        std::wstring annotation;
+        std::wstring label;
+    };
+    std::wstring pending_;
+    std::vector<RuntimeCandidate> candidates_;
+    unsigned int page_index_ = 0;
+    unsigned int page_size_ = 9;
+    unsigned int total_candidates_ = 0;
+    CandidateKey selected_key_{};
+    bool has_selected_key_ = false;
+    bool has_previous_page_ = false;
+    bool has_next_page_ = false;
+    std::string last_committed_;
+    TfGuidAtom display_attribute_atom_ = TF_INVALID_GUIDATOM;
 };
 
 HRESULT CreateHeshunTextService(REFIID riid, void** object);

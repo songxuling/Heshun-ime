@@ -94,10 +94,30 @@ extern "C" STDAPI DllRegisterServer() {
     if (FAILED(hr)) return hr;
     hr = SetStringValue(HKEY_CURRENT_USER, base + L"\\InprocServer32", nullptr, module);
     if (FAILED(hr)) return hr;
-    return SetStringValue(HKEY_CURRENT_USER, base + L"\\InprocServer32", L"ThreadingModel", L"Apartment");
+    hr = SetStringValue(HKEY_CURRENT_USER, base + L"\\InprocServer32", L"ThreadingModel", L"Apartment");
+    if (FAILED(hr)) return hr;
+
+    ITfCategoryMgr* categories = nullptr;
+    hr = CoCreateInstance(CLSID_TF_CategoryMgr, nullptr, CLSCTX_INPROC_SERVER,
+                           IID_PPV_ARGS(&categories));
+    if (SUCCEEDED(hr)) {
+        hr = categories->RegisterCategory(CLSID_HeshunTextService,
+                                          GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER,
+                                          CLSID_HeshunTextService);
+        categories->Release();
+    }
+    return hr;
 }
 
 extern "C" STDAPI DllUnregisterServer() {
+    ITfCategoryMgr* categories = nullptr;
+    if (SUCCEEDED(CoCreateInstance(CLSID_TF_CategoryMgr, nullptr, CLSCTX_INPROC_SERVER,
+                                    IID_PPV_ARGS(&categories)))) {
+        categories->UnregisterCategory(CLSID_HeshunTextService,
+                                       GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER,
+                                       CLSID_HeshunTextService);
+        categories->Release();
+    }
     const std::wstring base = L"Software\\Classes\\CLSID\\" + ClsidString();
     const LONG result = RegDeleteTreeW(HKEY_CURRENT_USER, base.c_str());
     return (result == ERROR_SUCCESS || result == ERROR_FILE_NOT_FOUND) ? S_OK : HRESULT_FROM_WIN32(result);
