@@ -45,10 +45,16 @@ endif()
 
 add_executable(heshun_tsf_profile src/profile_tool.cpp)
 add_executable(heshun_tsf_activation_probe tests/com_activation_probe.cpp)
+add_executable(heshun_tsf_abi_header_contract tests/abi_header_contract.cpp)
 target_compile_definitions(heshun_tsf_profile PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_definitions(heshun_tsf_activation_probe PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_definitions(heshun_tsf_abi_header_contract PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_include_directories(heshun_tsf_profile PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_include_directories(heshun_tsf_activation_probe PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_include_directories(heshun_tsf_abi_header_contract PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/../heshun/include
+)
 target_link_libraries(heshun_tsf_profile PRIVATE ole32)
 target_link_libraries(heshun_tsf_activation_probe PRIVATE ole32)
 set_target_properties(heshun_tsf_activation_probe PROPERTIES
@@ -57,9 +63,15 @@ set_target_properties(heshun_tsf_activation_probe PROPERTIES
 set_target_properties(heshun_tsf_profile PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
+set_target_properties(heshun_tsf_abi_header_contract PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
 
 enable_testing()
 add_test(NAME tsf_binary_exports
   COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_exports.ps1" "$<TARGET_FILE:heshun_tsf>"
+)
+add_test(NAME tsf_abi_header_contract
+  COMMAND "$<TARGET_FILE:heshun_tsf_abi_header_contract>"
 )

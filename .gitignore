@@ -28,3 +28,6 @@ Desktop.ini
 
 # Source-controlled binary dictionaries are intentionally exempt.
 !heshun/schemas/*.bin
+
+# Local-only development notes and verification artifacts
+/docs-dev/

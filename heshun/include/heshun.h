@@ -13,6 +13,49 @@ extern "C" {
 
 typedef void hs_handle;
 
+/* Owned runtime ABI v1. All views remain valid until hs_runtime_result_free. */
+typedef struct hs_text_view { const unsigned char* ptr; unsigned int len; } hs_text_view;
+typedef struct hs_candidate_view {
+    unsigned int source;
+    unsigned int ordinal;
+    hs_text_view word;
+    hs_text_view annotation;
+    hs_text_view label;
+} hs_candidate_view;
+typedef struct hs_runtime_event_t {
+    unsigned int opcode; /* 0=text,1=backspace,2=delete,3=escape,4=space,5=enter,
+                            6=select,7=move,8=page,9=toggle-ascii,10=toggle-full-shape,12=reset */
+    long long value;
+    unsigned int source;
+    unsigned int ordinal;
+} hs_runtime_event_t;
+typedef struct hs_runtime_result {
+    unsigned int disposition;
+    unsigned int composition;
+    hs_text_view committed;
+    hs_text_view pending;
+    const hs_candidate_view* candidates;
+    unsigned int candidate_count;
+    unsigned int page_index;
+    unsigned int page_size;
+    unsigned int total_candidates;
+    unsigned int selected_source;
+    unsigned int selected_ordinal;
+    unsigned char has_previous;
+    unsigned char has_next;
+    unsigned char ascii_mode;
+    unsigned char full_shape;
+    unsigned char composing;
+    unsigned int error_code;
+} hs_runtime_result;
+
+unsigned int hs_runtime_abi_version(void);
+hs_handle* hs_runtime_new_schema(const char* schema_path);
+void hs_runtime_free(hs_handle* runtime);
+hs_handle* hs_runtime_event(hs_handle* runtime, const hs_runtime_event_t* event);
+const hs_runtime_result* hs_runtime_result_view(const hs_handle* result);
+void hs_runtime_result_free(hs_handle* result);
+
 /* 生命周期 */
 hs_handle* hs_engine_load(const char* bin_path);     /* 失败 NULL */
 hs_handle* hs_engine_load_schema(const char* schema_path); /* 从 schema.yaml 加载; 失败 NULL */

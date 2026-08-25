@@ -505,6 +505,8 @@ impl<'a> Session<'a> {
         if exact.is_empty() && prefix.is_empty() {
             // 音码输入始终保留用户输入的字母。当前串没有候选时，
             // 只隐藏候选窗口，继续允许用户输入、退格或清空修正。
+            self.sentence_cands.clear();
+            self.sentence_offset = 0;
             return FeedResult::Waiting;
         }
 

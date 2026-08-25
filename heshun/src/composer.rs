@@ -4,9 +4,10 @@
 //! 按词频总分排序返回最佳 N 个句子候选。
 
 use crate::pinyin::{normalize_pinyin, PinyinCandidate, PinyinDict};
+use serde::{Deserialize, Serialize};
 
 /// 一个句子候选：词序列 + 总词频分。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SentenceCandidate {
     pub words: Vec<String>,
     pub score: u32,

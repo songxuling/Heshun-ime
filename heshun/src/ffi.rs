@@ -9,9 +9,163 @@
 //! - ZPY1 (0x3159505A) → 音码 Script 引擎
 
 use crate::engine::{Engine, FeedResult, SchemaKind, Session};
+use crate::core::{CandidateKey, CandidateSource, CoreRuntime, EngineStore, EventDisposition, InputEvent};
 use crate::pinyin::PinyinDict;
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::ptr;
+use std::sync::Arc;
+
+pub const HS_RUNTIME_ABI_VERSION: u32 = 1;
+
+#[repr(C)]
+pub struct HsTextView {
+    pub ptr: *const u8,
+    pub len: u32,
+}
+
+#[repr(C)]
+pub struct HsCandidateView {
+    pub source: u32,
+    pub ordinal: u32,
+    pub word: HsTextView,
+    pub annotation: HsTextView,
+    pub label: HsTextView,
+}
+
+#[repr(C)]
+pub struct HsRuntimeResult {
+    pub disposition: u32,
+    pub composition: u32,
+    pub committed: HsTextView,
+    pub pending: HsTextView,
+    pub candidates: *const HsCandidateView,
+    pub candidate_count: u32,
+    pub page_index: u32,
+    pub page_size: u32,
+    pub total_candidates: u32,
+    pub selected_source: u32,
+    pub selected_ordinal: u32,
+    pub has_previous: u8,
+    pub has_next: u8,
+    pub ascii_mode: u8,
+    pub full_shape: u8,
+    pub composing: u8,
+    pub error_code: u32,
+}
+
+#[repr(C)]
+pub struct HsRuntimeEvent {
+    pub opcode: u32,
+    pub value: i64,
+    pub source: u32,
+    pub ordinal: u32,
+}
+
+struct RuntimeResultOwner {
+    result: HsRuntimeResult,
+    _committed: CString,
+    _pending: CString,
+    candidates: Vec<HsCandidateView>,
+    candidate_text: Vec<(Box<CString>, Box<CString>, Box<CString>)>,
+}
+
+struct RuntimeHandle {
+    runtime: CoreRuntime,
+}
+
+fn text_view(value: &CString) -> HsTextView {
+    HsTextView { ptr: value.as_ptr() as *const u8, len: value.as_bytes().len() as u32 }
+}
+
+fn runtime_result(result: crate::core::CommandResult) -> *mut c_void {
+    let snapshot = result.snapshot;
+    let committed = CString::new(result.committed.unwrap_or_default()).unwrap_or_default();
+    let pending = CString::new(snapshot.pending).unwrap_or_default();
+    let mut owner = Box::new(RuntimeResultOwner {
+        result: HsRuntimeResult {
+            disposition: match result.disposition { EventDisposition::Consumed => 1, EventDisposition::PassedThrough => 0 },
+            composition: match result.composition { crate::core::CompositionAction::Keep => 0, crate::core::CompositionAction::Update => 1, crate::core::CompositionAction::End => 2 },
+            committed: text_view(&committed), pending: text_view(&pending), candidates: ptr::null(),
+            candidate_count: 0, page_index: snapshot.candidates.page_index as u32,
+            page_size: snapshot.candidates.page_size as u32, total_candidates: snapshot.candidates.total as u32,
+            selected_source: snapshot.candidates.selected.map(|key| key.source as u32).unwrap_or(0),
+            selected_ordinal: snapshot.candidates.selected.map(|key| key.ordinal).unwrap_or(0),
+            has_previous: snapshot.candidates.has_previous as u8, has_next: snapshot.candidates.has_next as u8,
+            ascii_mode: snapshot.status.ascii_mode as u8, full_shape: snapshot.status.full_shape as u8,
+            composing: snapshot.status.composing as u8,
+            error_code: if result.error.is_some() { 1 } else { 0 },
+        },
+        _committed: committed, _pending: pending, candidates: Vec::new(), candidate_text: Vec::new(),
+    });
+    for candidate in snapshot.candidates.items {
+        let word = Box::new(CString::new(candidate.word).unwrap_or_default());
+        let annotation = Box::new(CString::new(candidate.annotation).unwrap_or_default());
+        let label = Box::new(CString::new(candidate.label).unwrap_or_default());
+        owner.candidate_text.push((word, annotation, label));
+        let (word, annotation, label) = owner.candidate_text.last().unwrap();
+        owner.candidates.push(HsCandidateView {
+            source: candidate.key.source as u32, ordinal: candidate.key.ordinal,
+            word: text_view(word), annotation: text_view(annotation), label: text_view(label),
+        });
+    }
+    owner.result.candidates = owner.candidates.as_ptr();
+    owner.result.candidate_count = owner.candidates.len() as u32;
+    Box::into_raw(owner) as *mut c_void
+}
+
+fn runtime_event(event: &HsRuntimeEvent) -> Option<InputEvent> {
+    Some(match event.opcode {
+        0 => InputEvent::Text(char::from_u32(event.value as u32)?),
+        1 => InputEvent::Backspace,
+        2 => InputEvent::Delete,
+        3 => InputEvent::Escape,
+        4 => InputEvent::Space,
+        5 => InputEvent::Enter,
+        6 => InputEvent::Select(CandidateKey { source: match event.source { 1 => CandidateSource::Table, 2 => CandidateSource::ScriptExact, 3 => CandidateSource::ScriptSentence, 4 => CandidateSource::ScriptPrefix, 5 => CandidateSource::Reverse, _ => return None }, ordinal: event.ordinal }),
+        7 => InputEvent::MoveSelection(event.value as i32),
+        8 => InputEvent::Page(event.value as i32),
+        9 => InputEvent::ToggleAscii,
+        10 => InputEvent::ToggleFullShape,
+        12 => InputEvent::Reset,
+        _ => return None,
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn hs_runtime_abi_version() -> u32 { HS_RUNTIME_ABI_VERSION }
+
+#[no_mangle]
+pub extern "C" fn hs_runtime_new_schema(schema_path: *const c_char) -> *mut c_void {
+    let Some(path) = cstr(schema_path) else { return ptr::null_mut() };
+    let Ok(engine) = Engine::from_schema_file(std::path::Path::new(path)) else { return ptr::null_mut() };
+    let mut store = EngineStore::new();
+    store.insert("default", engine);
+    let Ok(runtime) = CoreRuntime::new(Arc::new(store), "default") else { return ptr::null_mut() };
+    Box::into_raw(Box::new(RuntimeHandle { runtime })) as *mut c_void
+}
+
+#[no_mangle]
+pub extern "C" fn hs_runtime_free(runtime: *mut c_void) {
+    if !runtime.is_null() { drop(unsafe { Box::from_raw(runtime as *mut RuntimeHandle) }); }
+}
+
+#[no_mangle]
+pub extern "C" fn hs_runtime_event(runtime: *mut c_void, event: *const HsRuntimeEvent) -> *mut c_void {
+    if runtime.is_null() || event.is_null() { return ptr::null_mut(); }
+    let Some(event) = runtime_event(unsafe { &*event }) else { return ptr::null_mut() };
+    let handle = unsafe { &mut *(runtime as *mut RuntimeHandle) };
+    runtime_result(handle.runtime.dispatch(event))
+}
+
+#[no_mangle]
+pub extern "C" fn hs_runtime_result_view(result: *const c_void) -> *const HsRuntimeResult {
+    if result.is_null() { ptr::null() } else { unsafe { &(*(result as *const RuntimeResultOwner)).result } }
+}
+
+#[no_mangle]
+pub extern "C" fn hs_runtime_result_free(result: *mut c_void) {
+    if !result.is_null() { drop(unsafe { Box::from_raw(result as *mut RuntimeResultOwner) }); }
+}
 
 /// 从二进制码表文件加载引擎。自动识别 ZMD1(形码) / ZPY1(音码)。失败返回 NULL。
 #[no_mangle]
@@ -329,5 +483,34 @@ mod tests {
         hs_str_free(ptr::null_mut());
         hs_session_free(ptr::null_mut());
         hs_engine_free(ptr::null_mut());
+    }
+
+    #[test]
+    fn owned_runtime_abi_returns_bounded_views() {
+        let schema = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("schemas")
+            .join("zhengma66.schema.yaml");
+        let cpath = cstring(schema.to_str().unwrap());
+        assert_eq!(hs_runtime_abi_version(), HS_RUNTIME_ABI_VERSION);
+        let runtime = hs_runtime_new_schema(cpath.as_ptr());
+        assert!(!runtime.is_null());
+        let event = HsRuntimeEvent { opcode: 0, value: 'a' as i64, source: 0, ordinal: 0 };
+        let result = hs_runtime_event(runtime, &event);
+        assert!(!result.is_null());
+        let view = hs_runtime_result_view(result);
+        assert!(!view.is_null());
+        let view = unsafe { &*view };
+        assert_eq!(view.disposition, 1);
+        assert_eq!(view.pending.len, 1);
+        assert!(view.candidate_count > 0);
+        assert!(!view.candidates.is_null());
+        let first = unsafe { &*view.candidates };
+        assert!(first.word.len > 0);
+        hs_runtime_result_free(result);
+        assert!(hs_runtime_event(ptr::null_mut(), &event).is_null());
+        let invalid = HsRuntimeEvent { opcode: 999, value: 0, source: 0, ordinal: 0 };
+        assert!(hs_runtime_event(runtime, &invalid).is_null());
+        hs_runtime_free(runtime);
+        assert!(hs_runtime_result_view(ptr::null()).is_null());
     }
 }

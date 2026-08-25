@@ -15,6 +15,7 @@
 
 pub mod algebra;
 pub mod composer;
+pub mod core;
 pub mod dict;
 pub mod engine;
 pub mod ffi;
@@ -28,6 +29,7 @@ pub mod zrm;
 
 pub use algebra::Algebra;
 pub use composer::compose;
+pub use core::{CandidateKey, CandidatePage, CandidateSource, CandidateView, CommandResult, ContextSnapshot, CoreError, CoreRuntime, CoreState, EngineStore, EventDisposition, InputEvent, RuntimeStatus, SchemaId};
 pub use dict::Dict;
 pub use engine::{Candidate, Engine, FeedResult, SchemaKind, Session};
 pub use pinyin::PinyinDict;

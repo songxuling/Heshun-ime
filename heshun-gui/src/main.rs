@@ -4,7 +4,8 @@
 //! 键盘输入 → 引擎 → 候选面板 → 上屏。
 
 use eframe::egui;
-use heshun::engine::{Engine, FeedResult};
+use heshun::{CandidateKey, CoreRuntime, Engine, EngineStore, InputEvent};
+use std::sync::Arc;
 
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
@@ -51,21 +52,14 @@ const SCHEMES: &[(&str, &str)] = &[
 ];
 
 struct App {
-    engine: Engine,
-    buf: String,
-    sentence_cands: Vec<heshun::composer::SentenceCandidate>,
+    runtime: CoreRuntime,
     output: String,
-    // 可见候选（词 + 注释）；注释通常是编码，郑码反查时为对应郑码。
-    candidates: Vec<heshun::engine::Candidate>,
     // 编辑器光标位置（字符索引，而非 UTF-8 字节索引）。
     cursor_char: usize,
-    // 候选翻页偏移，页大小固定为 9。
-    candidate_page: usize,
     last_error: Option<String>,
     // 唯一的键盘输入目标。持续申请焦点，避免候选窗/工具栏点击后失焦。
     editor_id: egui::Id,
     scheme_idx: usize,
-    ascii_mode: bool,
 }
 
 impl App {
@@ -86,53 +80,57 @@ impl App {
         Err("未找到 schemas 资源目录；请将 schemas 放在程序目录，或放在 heshun/schemas".to_owned())
     }
 
-    fn load_scheme(&mut self, idx: usize) -> Result<(), String> {
-        let (id, _) = SCHEMES[idx];
-        let schema_dir = Self::schema_dir()?;
-        let schema = schema_dir.join(format!("{id}.schema.yaml"));
-        self.engine = Engine::from_schema_file(&schema)?;
-        self.buf.clear();
-        self.sentence_cands.clear();
-        self.candidates.clear();
-        self.candidate_page = 0;
-        self.scheme_idx = idx;
-        self.last_error = None;
-        Ok(())
-    }
-
     fn switch_scheme(&mut self, idx: usize) {
         if idx == self.scheme_idx { return; }
-        if let Err(error) = self.engine.save_user_dict() {
+        if let Err(error) = self.runtime.save_user_dict() {
             self.last_error = Some(error);
             return;
         }
-        if let Err(error) = self.load_scheme(idx) {
-            self.last_error = Some(error);
+        let result = self.runtime.dispatch(InputEvent::SetSchema(SCHEMES[idx].0.to_owned()));
+        if let Some(error) = result.error {
+            self.last_error = Some(format!("方案切换失败：{error:?}"));
+        } else {
+            self.scheme_idx = idx;
+            self.last_error = None;
         }
     }
 
     fn save_user_dict(&mut self) {
-        if let Err(error) = self.engine.save_user_dict() {
+        if let Err(error) = self.runtime.save_user_dict() {
             self.last_error = Some(error);
         }
     }
 
     fn new() -> Self {
         let editor_id = egui::Id::new("ime_output_editor");
-        let fallback = Engine::new(heshun::engine::SchemaKind::Table {
-            dict: heshun::dict::Dict::from_entries(Vec::new()),
-            max_code_len: 4,
-            auto_select: false,
-            auto_select_pattern: None,
-        });
+        let mut store = EngineStore::new();
+        let mut load_errors = Vec::new();
+        if let Ok(schema_dir) = Self::schema_dir() {
+            for (id, _) in SCHEMES {
+                match Engine::from_schema_file(&schema_dir.join(format!("{id}.schema.yaml"))) {
+                    Ok(engine) => store.insert(*id, engine),
+                    Err(error) => load_errors.push(format!("{id}: {error}")),
+                }
+            }
+        } else {
+            load_errors.push("未找到 schemas 资源目录".to_owned());
+        }
+        if !store.contains(SCHEMES[0].0) {
+            store.insert(SCHEMES[0].0, Engine::new(heshun::engine::SchemaKind::Table {
+                dict: heshun::dict::Dict::from_entries(Vec::new()),
+                max_code_len: 4,
+                auto_select: false,
+                auto_select_pattern: None,
+            }));
+        }
+        let runtime = CoreRuntime::new(Arc::new(store), SCHEMES[0].0)
+            .expect("fallback schema must be available");
         let mut app = App {
-            engine: fallback, buf: String::new(), sentence_cands: Vec::new(),
-            output: String::new(), candidates: Vec::new(),
-            cursor_char: 0, candidate_page: 0, last_error: None,
-            editor_id, scheme_idx: 0, ascii_mode: false,
+            runtime, output: String::new(), cursor_char: 0, last_error: None,
+            editor_id, scheme_idx: 0,
         };
-        if let Err(error) = app.load_scheme(0) {
-            app.last_error = Some(error);
+        if !load_errors.is_empty() {
+            app.last_error = Some(load_errors.join("；"));
         }
         app
     }
@@ -152,67 +150,43 @@ impl App {
         self.cursor_char -= 1;
     }
 
-    fn refresh_candidates(&mut self) {
-        self.candidate_page = 0;
-        if self.buf.is_empty() {
-            self.candidates.clear();
-            return;
-        }
-        let mut session = self.engine.session();
-        session.restore_state(self.buf.clone(), self.sentence_cands.clone());
-        session.ascii_mode = self.ascii_mode;
-        self.candidates = session.candidates(0);
-    }
-
     fn handle_key(&mut self, ch: char) {
-        // 构建临时 session
-        let mut sess = self.engine.session();
-        sess.restore_state(std::mem::take(&mut self.buf), std::mem::take(&mut self.sentence_cands));
-        sess.ascii_mode = self.ascii_mode;
-
-        let mut delete_output = false;
-        let committed = match ch {
+        let event = match ch {
             '\u{8}' | '\u{7f}' => {
-                delete_output = !sess.backspace();
-                None
+                InputEvent::Backspace
             }
-            '\u{1b}' => { sess.clear(); None }
-            ' ' => self.candidates.first().and_then(|c| sess.select_word(&c.word)),
+            '\u{1b}' => InputEvent::Escape,
+            ' ' => InputEvent::Space,
             '1'..='9' => {
-                let index = self.candidate_page * 9 + (ch as usize - '0' as usize - 1);
-                self.candidates.get(index).and_then(|c| sess.select_word(&c.word))
+                let snapshot = self.runtime.snapshot();
+                let index = ch as usize - '1' as usize;
+                snapshot.candidates.items.get(index)
+                    .map(|candidate| InputEvent::Select(candidate.key))
+                    .unwrap_or(InputEvent::Select(heshun::CandidateKey {
+                        source: heshun::CandidateSource::Table,
+                        ordinal: u32::MAX,
+                    }))
             }
-            _ => match sess.feed(ch) {
-                FeedResult::Committed(text) => Some(text),
-                _ => None,
-            },
+            _ => InputEvent::Text(ch),
         };
-
-        // 保存 session 状态
-        let (b, sc) = sess.take_state();
-        self.buf = b;
-        self.sentence_cands = sc;
-        self.ascii_mode = sess.ascii_mode;
-        drop(sess);
-        if delete_output { self.delete_before_cursor(); }
-        if let Some(text) = committed { self.insert_committed(&text); }
-
-        self.refresh_candidates();
+        let result = self.runtime.dispatch(event);
+        if matches!(result.disposition, heshun::EventDisposition::PassedThrough)
+            && matches!(ch, '\u{8}' | '\u{7f}')
+        {
+            self.delete_before_cursor();
+        }
+        if let Some(error) = result.error {
+            self.last_error = Some(format!("输入处理失败：{error:?}"));
+        }
+        if let Some(text) = result.committed { self.insert_committed(&text); }
     }
 
-    fn select_visible_candidate(&mut self, index: usize) {
-        let Some(word) = self.candidates.get(index).map(|c| c.word.clone()) else { return };
-        let mut session = self.engine.session();
-        session.restore_state(std::mem::take(&mut self.buf), std::mem::take(&mut self.sentence_cands));
-        session.ascii_mode = self.ascii_mode;
-        let committed = session.select_word(&word);
-        let (buf, sentence_cands) = session.take_state();
-        self.buf = buf;
-        self.sentence_cands = sentence_cands;
-        self.ascii_mode = session.ascii_mode;
-        drop(session);
-        if let Some(text) = committed { self.insert_committed(&text); }
-        self.refresh_candidates();
+    fn select_visible_candidate(&mut self, key: CandidateKey) {
+        let result = self.runtime.dispatch(InputEvent::Select(key));
+        if let Some(error) = result.error {
+            self.last_error = Some(format!("候选选择失败：{error:?}"));
+        }
+        if let Some(text) = result.committed { self.insert_committed(&text); }
     }
 
     /// 将 TextEdit 的插入光标同步到本程序维护的字符位置。
@@ -260,13 +234,8 @@ impl eframe::App for App {
             ));
         });
 
-        if page_delta != 0 && !self.candidates.is_empty() {
-            let last_page = self.candidates.len().saturating_sub(1) / 9;
-            self.candidate_page = if page_delta < 0 {
-                self.candidate_page.saturating_sub(1)
-            } else {
-                (self.candidate_page + 1).min(last_page)
-            };
+        if page_delta != 0 {
+            self.runtime.dispatch(InputEvent::Page(page_delta));
         }
         for ch in input_chars {
             self.handle_key(ch);
@@ -296,19 +265,20 @@ impl eframe::App for App {
                         }
                     });
                 ui.separator();
-                let mode = if self.ascii_mode { "EN" } else { "中" };
+                let mode = if self.runtime.snapshot().status.ascii_mode { "EN" } else { "中" };
                 ui.label(format!("模式：{mode}"));
                 if ui.button("切换").clicked() {
-                    self.ascii_mode = !self.ascii_mode;
+                    self.runtime.dispatch(InputEvent::ToggleAscii);
                 }
             });
         });
 
         // ── 3. 中央区域 ────────────────────────────
         egui::CentralPanel::default().show(ctx, |ui| {
-            if !self.buf.is_empty() {
-                let mode_hint = if self.ascii_mode { " [EN]" } else { "" };
-                ui.label(format!("编码：{}{}", self.buf, mode_hint));
+            let snapshot = self.runtime.snapshot();
+            if !snapshot.pending.is_empty() {
+                let mode_hint = if snapshot.status.ascii_mode { " [EN]" } else { "" };
+                ui.label(format!("编码：{}{}", snapshot.pending, mode_hint));
             }
             let edit = egui::TextEdit::multiline(&mut self.output)
                 .id(self.editor_id)
@@ -320,11 +290,8 @@ impl eframe::App for App {
             }
 
             // 候选面板：每页 9 个，翻页后数字键 1-9 对应当前页。
-            if !self.candidates.is_empty() {
-                let page_count = self.candidates.len().div_ceil(9);
-                self.candidate_page = self.candidate_page.min(page_count.saturating_sub(1));
-                let start = self.candidate_page * 9;
-                let end = (start + 9).min(self.candidates.len());
+            if !snapshot.candidates.items.is_empty() {
+                let page_count = snapshot.candidates.total.div_ceil(snapshot.candidates.page_size);
                 let mut clicked = None;
                 egui::Window::new("candidates")
                     .title_bar(false)
@@ -332,24 +299,24 @@ impl eframe::App for App {
                     .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -20.0])
                     .show(ctx, |ui| {
                         ui.horizontal_wrapped(|ui| {
-                            for (visible, cand) in self.candidates[start..end].iter().enumerate() {
-                                let label = format!("{}. {}  [{}]", visible + 1, cand.word, cand.code);
-                                if ui.button(label).clicked() { clicked = Some(start + visible); }
+                            for cand in &snapshot.candidates.items {
+                                let label = format!("{}. {}  [{}]", cand.label, cand.word, cand.annotation);
+                                if ui.button(label).clicked() { clicked = Some(cand.key); }
                             }
                         });
                         if page_count > 1 {
                             ui.horizontal(|ui| {
-                                if ui.button("上一页").clicked() && self.candidate_page > 0 {
-                                    self.candidate_page -= 1;
+                                if ui.button("上一页").clicked() && snapshot.candidates.has_previous {
+                                    self.runtime.dispatch(InputEvent::Page(-1));
                                 }
-                                ui.label(format!("{}/{} 页", self.candidate_page + 1, page_count));
-                                if ui.button("下一页").clicked() && self.candidate_page + 1 < page_count {
-                                    self.candidate_page += 1;
+                                ui.label(format!("{}/{} 页", snapshot.candidates.page_index + 1, page_count));
+                                if ui.button("下一页").clicked() && snapshot.candidates.has_next {
+                                    self.runtime.dispatch(InputEvent::Page(1));
                                 }
                             });
                         }
                     });
-                if let Some(index) = clicked { self.select_visible_candidate(index); }
+                if let Some(key) = clicked { self.select_visible_candidate(key); }
             }
         });
 
