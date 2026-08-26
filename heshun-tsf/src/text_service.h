@@ -56,6 +56,7 @@ private:
     void FreeEngine();
     bool HasPending() const;
     bool IsHandledKey(WPARAM key) const;
+    bool IsCursorKey(WPARAM key) const;
     void ToggleAsciiMode(ITfContext* context);
     void ToggleInputMethod(ITfContext* context);
     void SelectCandidate(ITfContext* context, CandidateKey key);
@@ -94,6 +95,7 @@ private:
     unsigned int page_index_ = 0;
     unsigned int page_size_ = 9;
     unsigned int total_candidates_ = 0;
+    unsigned int cursor_ = 0;
     CandidateKey selected_key_{};
     bool has_selected_key_ = false;
     bool has_previous_page_ = false;

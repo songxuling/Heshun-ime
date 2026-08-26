@@ -92,10 +92,17 @@ impl PinyinDict {
 
     /// 精确匹配：连续拼音 == code 的所有候选（词频降序）。
     pub fn exact(&self, code: &str) -> Vec<PinyinCandidate> {
+        self.exact_limited(code, usize::MAX)
+    }
+
+    /// 精确匹配的限量版本。条目按同码词频降序排列时，返回前 `limit` 项，
+    /// 避免组句器为一个高频单字编码复制整组候选。
+    pub fn exact_limited(&self, code: &str, limit: usize) -> Vec<PinyinCandidate> {
         let code = normalize_pinyin(code);
         let lo = self.codes.partition_point(|c| c.as_str() < code.as_str());
         let hi = self.codes.partition_point(|c| c.as_str() <= code.as_str());
         (lo..hi)
+            .take(limit)
             .map(|i| PinyinCandidate { word: self.word(i).to_string(), weight: self.weights[i] })
             .collect()
     }
@@ -295,6 +302,17 @@ mod tests {
     fn exact_missing() {
         let d = sample();
         assert!(d.exact("xx").is_empty());
+    }
+
+    #[test]
+    fn exact_limited_keeps_frequency_order() {
+        let d = PinyinDict::from_entries(vec![
+            ("a".into(), "甲".into(), 30),
+            ("a".into(), "乙".into(), 100),
+            ("a".into(), "丙".into(), 60),
+        ]);
+        let limited = d.exact_limited("a", 2);
+        assert_eq!(limited.iter().map(|c| c.word.as_str()).collect::<Vec<_>>(), vec!["乙", "丙"]);
     }
 
     #[test]

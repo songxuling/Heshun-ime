@@ -204,6 +204,7 @@ impl Engine {
         Session {
             engine: self,
             buf: String::new(),
+            cursor: 0,
             // 音码候选缓存
             sentence_cands: Vec::new(),
             sentence_offset: 0,
@@ -221,6 +222,7 @@ impl Engine {
 pub struct Session<'a> {
     engine: &'a Engine,
     buf: String,
+    cursor: usize,
     // 音码组句缓存
     sentence_cands: Vec<SentenceCandidate>,
     sentence_offset: usize,
@@ -238,12 +240,34 @@ impl<'a> Session<'a> {
     pub fn buf_mut(&mut self) -> &mut String { &mut self.buf }
     pub fn set_buf(&mut self, b: String) { self.buf = b; }
     pub fn set_sentence_cands(&mut self, sc: Vec<SentenceCandidate>) { self.sentence_cands = sc; }
-    pub fn take_state(&mut self) -> (String, Vec<SentenceCandidate>) {
-        (std::mem::take(&mut self.buf), std::mem::take(&mut self.sentence_cands))
+    pub fn take_state(&mut self) -> (String, Vec<SentenceCandidate>, usize) {
+        (std::mem::take(&mut self.buf), std::mem::take(&mut self.sentence_cands), self.cursor)
     }
     pub fn restore_state(&mut self, buf: String, sc: Vec<SentenceCandidate>) {
+        self.restore_state_at(buf, sc, usize::MAX);
+    }
+    pub fn restore_state_at(&mut self, buf: String, sc: Vec<SentenceCandidate>, cursor: usize) {
+        self.cursor = cursor.min(buf.chars().count());
         self.buf = buf;
         self.sentence_cands = sc;
+    }
+    pub fn cursor(&self) -> usize { self.cursor }
+    pub fn move_cursor(&mut self, delta: i32) {
+        self.cursor = (self.cursor as i32 + delta).clamp(0, self.buf.chars().count() as i32) as usize;
+    }
+    pub fn feed_at_cursor(&mut self, ch: char) -> FeedResult {
+        if self.cursor == self.buf.chars().count() {
+            let result = self.feed(ch);
+            if matches!(result, FeedResult::Waiting) { self.cursor += 1; }
+            else if matches!(result, FeedResult::Committed(_)) { self.cursor = 0; }
+            return result;
+        }
+        let byte = self.buf.char_indices().nth(self.cursor).map(|(i, _)| i).unwrap_or(self.buf.len());
+        self.buf.insert(byte, ch);
+        self.cursor += 1;
+        self.sentence_cands.clear();
+        self.sentence_offset = 0;
+        FeedResult::Waiting
     }
 
     /// 是否处于反查模式（pending 以反查前缀开头）。
@@ -620,7 +644,12 @@ impl<'a> Session<'a> {
     /// 退格。
     pub fn backspace(&mut self) -> bool {
         self.sentence_cands.clear();
-        self.buf.pop().is_some()
+        if self.cursor == 0 { return false; }
+        let start = self.buf.char_indices().nth(self.cursor - 1).map(|(i, _)| i).unwrap_or(0);
+        let end = self.buf.char_indices().nth(self.cursor).map(|(i, _)| i).unwrap_or(self.buf.len());
+        self.buf.replace_range(start..end, "");
+        self.cursor -= 1;
+        true
     }
 
     /// 清空缓冲。

@@ -24,7 +24,8 @@ typedef struct hs_candidate_view {
 } hs_candidate_view;
 typedef struct hs_runtime_event_t {
     unsigned int opcode; /* 0=text,1=backspace,2=delete,3=escape,4=space,5=enter,
-                            6=select,7=move,8=page,9=toggle-ascii,10=toggle-full-shape,12=reset */
+                            6=select,7=move-selection,8=page,9=toggle-ascii,10=toggle-full-shape,
+                            12=reset,13=move-cursor */
     long long value;
     unsigned int source;
     unsigned int ordinal;
@@ -34,6 +35,7 @@ typedef struct hs_runtime_result {
     unsigned int composition;
     hs_text_view committed;
     hs_text_view pending;
+    unsigned int cursor;
     const hs_candidate_view* candidates;
     unsigned int candidate_count;
     unsigned int page_index;

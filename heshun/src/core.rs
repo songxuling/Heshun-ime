@@ -49,6 +49,8 @@ pub struct CandidatePage {
 pub struct CoreState {
     pub schema: SchemaId,
     pub pending: String,
+    /// 插入光标在 pending 中的 Unicode 字符索引。
+    pub cursor: usize,
     pub sentence_candidates: Vec<SentenceCandidate>,
     pub ascii_mode: bool,
     pub full_shape: bool,
@@ -61,6 +63,7 @@ impl CoreState {
         Self {
             schema: schema.into(),
             pending: String::new(),
+            cursor: 0,
             sentence_candidates: Vec::new(),
             ascii_mode: false,
             full_shape: true,
@@ -71,6 +74,7 @@ impl CoreState {
 
     fn clear_composition(&mut self) {
         self.pending.clear();
+        self.cursor = 0;
         self.sentence_candidates.clear();
         self.page_index = 0;
         self.selected = None;
@@ -87,6 +91,7 @@ pub enum InputEvent {
     Enter,
     Select(CandidateKey),
     MoveSelection(i32),
+    MoveCursor(i32),
     Page(i32),
     ToggleAscii,
     SetAscii(bool),
@@ -119,6 +124,7 @@ pub struct RuntimeStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextSnapshot {
     pub pending: String,
+    pub cursor: usize,
     pub candidates: CandidatePage,
     pub status: RuntimeStatus,
 }
@@ -216,9 +222,9 @@ impl CoreRuntime {
                     return self.result(disposition, committed, CompositionAction::End, error);
                 };
                 let mut session = engine.session();
-                session.restore_state(self.state.pending.clone(), self.state.sentence_candidates.clone());
+                session.restore_state_at(self.state.pending.clone(), self.state.sentence_candidates.clone(), self.state.cursor);
                 session.ascii_mode = self.state.ascii_mode;
-                if let FeedResult::Committed(text) = session.feed(ch) { committed = Some(text); }
+                if let FeedResult::Committed(text) = session.feed_at_cursor(ch) { committed = Some(text); }
                 self.save_session(&mut session);
                 composition = if self.state.pending.is_empty() { CompositionAction::End } else { CompositionAction::Update };
             }
@@ -263,6 +269,11 @@ impl CoreRuntime {
                     let next = (current as i32 + delta).rem_euclid(page.items.len() as i32) as usize;
                     self.state.selected = Some(page.items[next].key);
                 }
+            }
+            InputEvent::MoveCursor(delta) => {
+                self.state.cursor = (self.state.cursor as i32 + delta)
+                    .clamp(0, self.state.pending.chars().count() as i32) as usize;
+                composition = if self.state.pending.is_empty() { CompositionAction::End } else { CompositionAction::Keep };
             }
             InputEvent::Page(delta) => self.move_page(delta),
             InputEvent::ToggleAscii => self.set_ascii(!self.state.ascii_mode),
@@ -321,7 +332,7 @@ impl CoreRuntime {
     fn with_session<T>(&mut self, f: impl FnOnce(&mut crate::engine::Session<'_>) -> T) -> T {
         let engine = self.store.get(&self.state.schema).cloned().expect("validated schema");
         let mut session = engine.session();
-        session.restore_state(self.state.pending.clone(), self.state.sentence_candidates.clone());
+        session.restore_state_at(self.state.pending.clone(), self.state.sentence_candidates.clone(), self.state.cursor);
         session.ascii_mode = self.state.ascii_mode;
         let result = f(&mut session);
         self.save_session(&mut session);
@@ -329,9 +340,10 @@ impl CoreRuntime {
     }
 
     fn save_session(&mut self, session: &mut crate::engine::Session<'_>) {
-        let (pending, sentence) = session.take_state();
+        let (pending, sentence, cursor) = session.take_state();
         self.state.pending = pending;
         self.state.sentence_candidates = sentence;
+        self.state.cursor = cursor;
     }
 
     fn build_snapshot(&self) -> ContextSnapshot {
@@ -343,6 +355,7 @@ impl CoreRuntime {
         let selected = self.state.selected.filter(|key| items.iter().any(|item| item.key == *key));
         ContextSnapshot {
             pending: self.state.pending.clone(),
+            cursor: self.state.cursor,
             candidates: CandidatePage {
                 items,
                 page_index: self.state.page_index,
@@ -364,7 +377,7 @@ impl CoreRuntime {
     fn all_candidates(&self) -> Vec<CandidateView> {
         let Some(engine) = self.store.get(&self.state.schema) else { return Vec::new() };
         let mut session = engine.session();
-        session.restore_state(self.state.pending.clone(), self.state.sentence_candidates.clone());
+        session.restore_state_at(self.state.pending.clone(), self.state.sentence_candidates.clone(), self.state.cursor);
         session.ascii_mode = self.state.ascii_mode;
         session.candidates(usize::MAX).into_iter().enumerate().map(|(ordinal, candidate)| CandidateView {
             key: CandidateKey { source: if engine.is_table() { CandidateSource::Table } else { CandidateSource::ScriptExact }, ordinal: ordinal as u32 },
@@ -459,6 +472,38 @@ mod tests {
         let target = page.items[0].clone();
         let result = runtime.dispatch(InputEvent::Select(target.key));
         assert_eq!(result.committed, Some(target.word));
+    }
+
+    #[test]
+    fn cursor_moves_and_inserts_at_middle() {
+        let mut runtime = CoreRuntime::new(store(), "script").unwrap();
+        for ch in "wox".chars() { runtime.dispatch(InputEvent::Text(ch)); }
+        assert_eq!(runtime.snapshot().cursor, 3);
+        runtime.dispatch(InputEvent::MoveCursor(-2));
+        assert_eq!(runtime.snapshot().cursor, 1);
+        runtime.dispatch(InputEvent::Text('a'));
+        assert_eq!(runtime.snapshot().pending, "waox");
+        assert_eq!(runtime.snapshot().cursor, 2);
+    }
+
+    #[test]
+    fn cursor_backspace_deletes_before_cursor() {
+        let mut runtime = CoreRuntime::new(store(), "script").unwrap();
+        for ch in "wox".chars() { runtime.dispatch(InputEvent::Text(ch)); }
+        runtime.dispatch(InputEvent::MoveCursor(-1));
+        runtime.dispatch(InputEvent::Backspace);
+        assert_eq!(runtime.snapshot().pending, "wx");
+        assert_eq!(runtime.snapshot().cursor, 1);
+    }
+
+    #[test]
+    fn cursor_clamps_at_pending_boundaries() {
+        let mut runtime = CoreRuntime::new(store(), "script").unwrap();
+        runtime.dispatch(InputEvent::MoveCursor(-1));
+        assert_eq!(runtime.snapshot().cursor, 0);
+        for ch in "wo".chars() { runtime.dispatch(InputEvent::Text(ch)); }
+        runtime.dispatch(InputEvent::MoveCursor(99));
+        assert_eq!(runtime.snapshot().cursor, 2);
     }
 
     #[test]

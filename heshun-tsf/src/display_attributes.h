@@ -48,10 +48,9 @@ private:
         TF_DISPLAYATTRIBUTE value{};
         value.crText.type = TF_CT_NONE;
         value.crBk.type = TF_CT_NONE;
-        value.lsStyle = TF_LS_SOLID;
+        value.lsStyle = TF_LS_DOT;
         value.fBoldLine = FALSE;
-        value.crLine.type = TF_CT_COLORREF;
-        value.crLine.cr = RGB(0, 120, 215);
+        value.crLine.type = TF_CT_NONE;
         value.bAttr = TF_ATTR_INPUT;
         return value;
     }();

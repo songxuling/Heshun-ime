@@ -56,7 +56,7 @@ bool CandidateWindow::EnsureWindow() {
     return window_ != nullptr;
 }
 
-void CandidateWindow::Show(std::wstring pending, std::vector<std::wstring> candidates, std::vector<CandidateKey> keys, unsigned int page_index, unsigned int page_size, unsigned int total) {
+void CandidateWindow::Show(std::wstring pending, std::vector<std::wstring> candidates, std::vector<CandidateKey> keys, unsigned int page_index, unsigned int page_size, unsigned int total, unsigned int cursor) {
     const bool content_changed = pending_ != pending || candidates_ != candidates || keys_ != keys;
     pending_ = std::move(pending);
     candidates_ = std::move(candidates);
@@ -64,11 +64,12 @@ void CandidateWindow::Show(std::wstring pending, std::vector<std::wstring> candi
     page_index_ = page_index;
     page_size_ = page_size ? page_size : 9;
     total_candidates_ = total;
+    cursor_ = std::min(cursor, static_cast<unsigned int>(pending_.size()));
     if (content_changed) {
         selected_index_ = 0;
         keyboard_selection_ = false;
     }
-    if (pending_.empty() || candidates_.empty() || !EnsureWindow()) {
+    if (pending_.empty() || !EnsureWindow()) {
         Hide();
         return;
     }
@@ -80,7 +81,7 @@ void CandidateWindow::Show(std::wstring pending, std::vector<std::wstring> candi
     const int padding = MulDiv(kPadding, scale, 96);
     const int rows = static_cast<int>(std::min<size_t>(9, candidates_.size()));
     const int client_width = MulDiv(500, scale, 96);
-    const int client_height = header + rows * row + padding * 2;
+    const int client_height = header + std::max(1, rows) * row + padding * 2;
     RECT frame{0, 0, client_width, client_height};
     AdjustWindowRectExForDpi(&frame, WS_POPUP, FALSE, WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST, dpi);
     const int width = frame.right - frame.left;
@@ -178,8 +179,27 @@ void CandidateWindow::Paint(HDC dc) {
     std::wstring title = L"编码: " + pending_ + L"  " + std::to_wstring(page_index_ + 1) +
                          L"/" + std::to_wstring(page_count);
     DrawTextW(dc, title.c_str(), -1, &line, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
+    const std::wstring caret_prefix = L"编码: " + pending_.substr(0, std::min<size_t>(cursor_, pending_.size()));
+    SIZE prefix_size{};
+    if (GetTextExtentPoint32W(dc, caret_prefix.c_str(), static_cast<int>(caret_prefix.size()), &prefix_size)) {
+        const int caret_x = line.left + prefix_size.cx + MulDiv(2, scale, 96);
+        HPEN caret_pen = CreatePen(PS_SOLID, std::max(1, MulDiv(1, scale, 96)), kSelectionText);
+        if (caret_pen) {
+            HGDIOBJ old_pen = SelectObject(dc, caret_pen);
+            MoveToEx(dc, caret_x, line.top + MulDiv(4, scale, 96), nullptr);
+            LineTo(dc, caret_x, line.bottom - MulDiv(4, scale, 96));
+            SelectObject(dc, old_pen);
+            DeleteObject(caret_pen);
+        }
+    }
 
     line.top += header;
+    if (candidates_.empty()) {
+        line.bottom = line.top + row;
+        SetTextColor(dc, kText);
+        DrawTextW(dc, L"无候选（可继续输入或退格）", -1, &line,
+                  DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
+    }
     for (size_t i = 0; i < std::min<size_t>(9, candidates_.size()); ++i) {
         line.bottom = line.top + row;
         if (i == selected_index_) {

@@ -47,7 +47,10 @@ pub fn compose(input: &str, dict: &PinyinDict, max_results: usize) -> Vec<Senten
 
         for j in 0..i {
             let segment = &input[j..i];
-            let cands: Vec<PinyinCandidate> = dict.exact(segment);
+            // The DP output is capped at max_results. Pinyin entries sharing
+            // one code are already ordered by descending frequency, so
+            // materialize only the candidates that can affect the top-N result.
+            let cands: Vec<PinyinCandidate> = dict.exact_limited(segment, max_results);
             if cands.is_empty() || prev_data[j].is_empty() {
                 continue;
             }

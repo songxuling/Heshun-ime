@@ -23,7 +23,7 @@ public:
     CandidateWindow(const CandidateWindow&) = delete;
     CandidateWindow& operator=(const CandidateWindow&) = delete;
 
-    void Show(std::wstring pending, std::vector<std::wstring> candidates, std::vector<CandidateKey> keys, unsigned int page_index, unsigned int page_size, unsigned int total);
+    void Show(std::wstring pending, std::vector<std::wstring> candidates, std::vector<CandidateKey> keys, unsigned int page_index, unsigned int page_size, unsigned int total, unsigned int cursor);
     void Hide();
     void SetCandidateClickHandler(std::function<void(CandidateKey)> handler);
     void MoveSelection(int direction);
@@ -45,6 +45,7 @@ private:
     unsigned int page_index_ = 0;
     unsigned int page_size_ = 9;
     unsigned int total_candidates_ = 0;
+    unsigned int cursor_ = 0;
     size_t selected_index_ = 0;
     bool keyboard_selection_ = false;
 };

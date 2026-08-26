@@ -104,6 +104,11 @@ extern "C" STDAPI DllRegisterServer() {
         hr = categories->RegisterCategory(CLSID_HeshunTextService,
                                           GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER,
                                           CLSID_HeshunTextService);
+        if (SUCCEEDED(hr)) {
+            hr = categories->RegisterCategory(CLSID_HeshunTextService,
+                                              GUID_TFCAT_DISPLAYATTRIBUTEPROPERTY,
+                                              CLSID_HeshunTextService);
+        }
         categories->Release();
     }
     return hr;
@@ -115,6 +120,9 @@ extern "C" STDAPI DllUnregisterServer() {
                                     IID_PPV_ARGS(&categories)))) {
         categories->UnregisterCategory(CLSID_HeshunTextService,
                                        GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER,
+                                       CLSID_HeshunTextService);
+        categories->UnregisterCategory(CLSID_HeshunTextService,
+                                       GUID_TFCAT_DISPLAYATTRIBUTEPROPERTY,
                                        CLSID_HeshunTextService);
         categories->Release();
     }

@@ -226,6 +226,28 @@ private:
                     attribute->Release();
                 }
             }
+            if (SUCCEEDED(hr)) {
+                ITfRange* caret_range = nullptr;
+                const HRESULT clone_hr = range->Clone(&caret_range);
+                if (SUCCEEDED(clone_hr)) {
+                    const HRESULT collapse_hr = caret_range->Collapse(ec, TF_ANCHOR_END);
+                    if (SUCCEEDED(collapse_hr)) {
+                        TF_SELECTION selection{};
+                        selection.range = caret_range;
+                        selection.style.ase = TF_AE_NONE;
+                        const HRESULT selection_hr = context_->SetSelection(ec, 1, &selection);
+                        Trace("Composition: SetCaret " + Hr(selection_hr));
+                        if (FAILED(selection_hr)) hr = selection_hr;
+                    } else {
+                        Trace("Composition: CollapseCaret " + Hr(collapse_hr));
+                        hr = collapse_hr;
+                    }
+                    caret_range->Release();
+                } else {
+                    Trace("Composition: CloneCaret " + Hr(clone_hr));
+                    hr = clone_hr;
+                }
+            }
             range->Release();
         }
         Trace(FAILED(hr) ? "Composition: update failed " + Hr(hr) : "Composition: updated");
@@ -239,6 +261,15 @@ private:
         HRESULT hr = composition->GetRange(&range);
         if (SUCCEEDED(hr)) {
             hr = range->SetText(ec, 0, text_.c_str(), static_cast<LONG>(text_.size()));
+            if (SUCCEEDED(hr)) {
+                ITfProperty* attribute = nullptr;
+                const HRESULT property_hr = context_->GetProperty(GUID_PROP_ATTRIBUTE, &attribute);
+                if (SUCCEEDED(property_hr)) {
+                    const HRESULT clear_hr = attribute->Clear(ec, range);
+                    Trace("Composition: ClearAttribute " + Hr(clear_hr));
+                    attribute->Release();
+                }
+            }
             if (SUCCEEDED(hr)) hr = range->Collapse(ec, TF_ANCHOR_END);
             if (SUCCEEDED(hr)) {
                 TF_SELECTION selection{};
@@ -262,6 +293,13 @@ private:
             ITfRange* range = nullptr;
             hr = composition->GetRange(&range);
             if (SUCCEEDED(hr)) {
+                ITfProperty* attribute = nullptr;
+                const HRESULT property_hr = context_->GetProperty(GUID_PROP_ATTRIBUTE, &attribute);
+                if (SUCCEEDED(property_hr)) {
+                    const HRESULT clear_hr = attribute->Clear(ec, range);
+                    Trace("Composition: ClearAttribute " + Hr(clear_hr));
+                    attribute->Release();
+                }
                 hr = range->SetText(ec, 0, L"", 0);
                 range->Release();
             }
@@ -531,6 +569,7 @@ bool HeshunTextService::DispatchRuntime(unsigned int opcode, long long value, Ca
 
     last_committed_ = Utf8ViewToString(view->committed);
     pending_ = Utf8ViewToUtf16(view->pending);
+    cursor_ = std::min<unsigned int>(view->cursor, static_cast<unsigned int>(pending_.size()));
     candidates_.clear();
     for (unsigned int i = 0; i < view->candidate_count; ++i) {
         const hs_candidate_view& candidate = view->candidates[i];
@@ -638,7 +677,7 @@ HRESULT HeshunTextService::CancelComposition(ITfContext* context) {
 }
 
 void HeshunTextService::UpdateCandidateWindow() {
-    if (!runtime_ || pending_.empty() || candidates_.empty()) {
+    if (!runtime_ || pending_.empty()) {
         if (candidate_window_) candidate_window_->Hide();
         Trace("CandidateWindow: hidden");
         return;
@@ -657,7 +696,7 @@ void HeshunTextService::UpdateCandidateWindow() {
             SelectCandidate(active_context_, key);
         });
     }
-    candidate_window_->Show(pending_, std::move(candidates), std::move(keys), page_index_, page_size_, total_candidates_);
+    candidate_window_->Show(pending_, std::move(candidates), std::move(keys), page_index_, page_size_, total_candidates_, cursor_);
     Trace("CandidateWindow: shown");
 }
 
@@ -722,6 +761,7 @@ bool HeshunTextService::IsHandledKey(WPARAM key) const {
     if (key >= 'a' && key <= 'z') return true;
     if (key == VK_BACK) return HasPending();
     if (key == VK_RETURN || key == VK_SPACE) return HasPending();
+    if (key == VK_LEFT || key == VK_RIGHT) return HasPending();
     if (key == VK_ESCAPE || key == VK_PRIOR || key == VK_NEXT || key == VK_UP || key == VK_DOWN) return true;
     return key >= '1' && key <= '9';
 }
@@ -733,6 +773,12 @@ bool HeshunTextService::FeedKey(WPARAM key, std::string& committed) {
     if (key >= 'a' && key <= 'z') { const bool consumed = DispatchRuntime(0, static_cast<long long>(key)); committed = last_committed_; return consumed; }
     if (key == VK_BACK) return DispatchRuntime(1);
     if (key == VK_ESCAPE) return DispatchRuntime(3);
+    if (key == VK_LEFT || key == VK_RIGHT) {
+        DispatchRuntime(13, key == VK_RIGHT ? 1 : -1);
+        UpdateComposition(active_context_);
+        UpdateCandidateWindow();
+        return true;
+    }
     if (key == VK_PRIOR || key == VK_NEXT) { ChangeCandidatePage(key == VK_NEXT ? 1 : -1); return true; }
     if (key == VK_UP || key == VK_DOWN) {
         DispatchRuntime(7, key == VK_DOWN ? 1 : -1);
@@ -744,6 +790,17 @@ bool HeshunTextService::FeedKey(WPARAM key, std::string& committed) {
         TraceSelectionKey(key);
         DispatchRuntime(key == VK_RETURN ? 5 : 4);
         committed = last_committed_;
+        if (committed.empty() && !pending_.empty()) {
+            // 没有候选时，Space/Enter 按输入法收尾语义提交当前预编辑原文。
+            const int needed = WideCharToMultiByte(CP_UTF8, 0, pending_.data(), static_cast<int>(pending_.size()), nullptr, 0, nullptr, nullptr);
+            if (needed > 0) {
+                std::string utf8(static_cast<size_t>(needed), '\0');
+                if (WideCharToMultiByte(CP_UTF8, 0, pending_.data(), static_cast<int>(pending_.size()), utf8.data(), needed, nullptr, nullptr)) {
+                    committed = std::move(utf8);
+                }
+            }
+            DispatchRuntime(3);
+        }
         if (!committed.empty()) Trace(std::string("CandidateWindow: selected text=") + committed);
         return true;
     }
