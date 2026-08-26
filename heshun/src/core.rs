@@ -301,12 +301,12 @@ impl CoreRuntime {
     }
 
     fn select_key(&mut self, key: CandidateKey, error: &mut Option<CoreError>) -> Option<String> {
-        let page = self.build_snapshot().candidates;
-        if !page.items.iter().any(|item| item.key == key) {
+        let all = self.all_candidates();
+        if !all.iter().any(|item| item.key == key) {
             *error = Some(CoreError::InvalidCandidate(key));
             return None;
         }
-        let word = page.items.iter().find(|item| item.key == key)?.word.clone();
+        let word = all.iter().find(|item| item.key == key)?.word.clone();
         self.with_session(|session| session.select_word(&word))
     }
 
@@ -438,6 +438,27 @@ mod tests {
         assert_eq!(result.error, Some(CoreError::InvalidCandidate(invalid)));
         assert_eq!(result.snapshot.pending, before.pending);
         assert!(result.snapshot.status.composing);
+    }
+
+    #[test]
+    fn paged_candidate_key_selects_from_full_candidate_set() {
+        let mut store = EngineStore::new();
+        let entries = (0..20)
+            .map(|i| (crate::dict::encode_code("a").unwrap(), format!("字{i}")))
+            .collect();
+        store.insert("table", Engine::new(SchemaKind::Table {
+            dict: Dict::from_entries(entries),
+            max_code_len: 4,
+            auto_select: false,
+            auto_select_pattern: None,
+        }));
+        let mut runtime = CoreRuntime::new(Arc::new(store), "table").unwrap();
+        runtime.dispatch(InputEvent::Text('a'));
+        runtime.dispatch(InputEvent::Page(1));
+        let page = runtime.snapshot().candidates;
+        let target = page.items[0].clone();
+        let result = runtime.dispatch(InputEvent::Select(target.key));
+        assert_eq!(result.committed, Some(target.word));
     }
 
     #[test]

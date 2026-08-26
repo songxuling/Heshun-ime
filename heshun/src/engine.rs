@@ -434,7 +434,12 @@ impl<'a> Session<'a> {
         auto_select: bool,
     ) -> FeedResult {
         if self.buf.len() >= max_code_len {
-            return FeedResult::Rejected;
+            // A table schema has a normal code length, but rejecting every
+            // later letter makes the TSF composition look dead. Keep the
+            // extra input editable; candidates disappear until backspace
+            // returns to a valid code.
+            self.buf.push(c);
+            return FeedResult::Waiting;
         }
         self.buf.push(c);
 
@@ -590,7 +595,7 @@ impl<'a> Session<'a> {
 
     /// 直接按候选文本上屏。用于外壳在用户词典排序后按可见候选选择。
     pub fn select_word(&mut self, word: &str) -> Option<String> {
-        let candidate = self.candidates(0).into_iter().find(|c| c.word == word)?;
+        let candidate = self.candidates(usize::MAX).into_iter().find(|c| c.word == word)?;
         let code = if self.in_reverse_mode() {
             self.reverse_query().unwrap_or("").to_owned()
         } else {
@@ -705,6 +710,22 @@ user_dict:
         for c in ['j', 'i', 'v'] { s.feed(c); }
         assert_eq!(s.feed('z'), FeedResult::Rejected);
         assert_eq!(s.pending(), "jiv");
+    }
+
+    #[test]
+    fn table_accepts_editable_input_after_max_code_length() {
+        let e = Engine::new(SchemaKind::Table {
+            dict: Dict::from_entries(vec![(encode_code("jivv").unwrap(), "中".into())]),
+            max_code_len: 4,
+            auto_select: false,
+            auto_select_pattern: None,
+        });
+        let mut s = e.session();
+        for c in ['j', 'i', 'v', 'v'] { assert_eq!(s.feed(c), FeedResult::Waiting); }
+        assert_eq!(s.feed('a'), FeedResult::Waiting);
+        assert_eq!(s.pending(), "jivva");
+        assert!(s.backspace());
+        assert_eq!(s.pending(), "jivv");
     }
 
     #[test]

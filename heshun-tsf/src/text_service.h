@@ -15,6 +15,7 @@ public:
     HeshunTextService();
     void ToggleInputMethodFromLangBar();
     bool IsPinyinMode() const { return pinyin_mode_; }
+    bool ascii_mode() const { return ascii_mode_; }
 
     // IUnknown
     STDMETHODIMP QueryInterface(REFIID riid, void** object) override;

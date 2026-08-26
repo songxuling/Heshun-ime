@@ -50,22 +50,29 @@ public:
     }
     STDMETHODIMP GetInfo(TF_LANGBARITEMINFO* info) override {
         if (!info) return E_INVALIDARG;
+        Trace("LangBarItem: GetInfo");
         ZeroMemory(info, sizeof(*info));
         info->clsidService = CLSID_HeshunTextService;
         info->guidItem = GUID_LANGBAR_ITEM_HESHUN;
-        info->dwStyle = TF_LBI_STYLE_BTN_BUTTON;
+        info->dwStyle = TF_LBI_STYLE_BTN_BUTTON | TF_LBI_STYLE_BTN_MENU | TF_LBI_STYLE_SHOWNINTRAY;
+        info->ulSort = 1;
         StringCchCopyW(info->szDescription, ARRAYSIZE(info->szDescription), L"heshun");
         return S_OK;
     }
     STDMETHODIMP GetStatus(DWORD* status) override {
         if (!status) return E_INVALIDARG;
+        Trace("LangBarItem: GetStatus");
         *status = 0;
         return S_OK;
     }
-    STDMETHODIMP Show(BOOL) override { return S_OK; }
+    STDMETHODIMP Show(BOOL show) override { Trace(show ? "LangBarItem: Show" : "LangBarItem: Hide"); return S_OK; }
     STDMETHODIMP GetTooltipString(BSTR* tooltip) override {
         if (!tooltip) return E_INVALIDARG;
-        *tooltip = SysAllocString(service_->IsPinyinMode() ? L"heshun 全拼 (点击切换郑码)" : L"heshun 郑码 (点击切换全拼)");
+        const wchar_t* mode = service_->ascii_mode() ? L"英文" : L"中文";
+        const wchar_t* schema = service_->IsPinyinMode() ? L"全拼" : L"郑码";
+        std::wstring value = std::wstring(L"heshun ") + mode + L" / " + schema +
+                             (service_->IsPinyinMode() ? L" (点击切换郑码)" : L" (点击切换全拼)");
+        *tooltip = SysAllocString(value.c_str());
         return *tooltip ? S_OK : E_OUTOFMEMORY;
     }
     STDMETHODIMP OnClick(TfLBIClick click, POINT, const RECT*) override {
@@ -77,11 +84,14 @@ public:
     STDMETHODIMP GetIcon(HICON* icon) override {
         if (!icon) return E_INVALIDARG;
         *icon = LoadIconW(g_module_instance, MAKEINTRESOURCEW(1));
+        Trace(*icon ? "LangBarItem: GetIcon ok" : "LangBarItem: GetIcon failed");
         return *icon ? S_OK : HRESULT_FROM_WIN32(GetLastError());
     }
     STDMETHODIMP GetText(BSTR* text) override {
         if (!text) return E_INVALIDARG;
-        *text = SysAllocString(service_->IsPinyinMode() ? L"全拼" : L"郑码");
+        *text = SysAllocString(service_->ascii_mode() ? L"英" :
+                               (service_->IsPinyinMode() ? L"全" : L"郑"));
+        Trace(*text ? "LangBarItem: GetText ok" : "LangBarItem: GetText failed");
         return *text ? S_OK : E_OUTOFMEMORY;
     }
 
@@ -168,6 +178,7 @@ public:
     }
 
     STDMETHODIMP DoEditSession(TfEditCookie ec) override {
+        Trace("CompositionEditSession: DoEditSession action=" + std::to_string(static_cast<int>(action_)));
         if (action_ == Action::Cancel) return End(ec, true);
         if (action_ == Action::Commit) return Commit(ec);
         return Update(ec);
@@ -175,6 +186,7 @@ public:
 
 private:
     HRESULT Update(TfEditCookie ec) {
+        Trace("CompositionEditSession: update begin");
         if (text_.empty()) return End(ec, true);
         ITfComposition* composition = service_->composition();
         HRESULT hr = S_OK;
@@ -199,6 +211,7 @@ private:
         hr = composition->GetRange(&range);
         if (SUCCEEDED(hr)) {
             hr = range->SetText(ec, 0, text_.c_str(), static_cast<LONG>(text_.size()));
+            Trace("Composition: SetText " + Hr(hr));
             if (SUCCEEDED(hr) && service_->display_attribute_atom() != TF_INVALID_GUIDATOM) {
                 ITfProperty* attribute = nullptr;
                 hr = context_->GetProperty(GUID_PROP_ATTRIBUTE, &attribute);
@@ -208,6 +221,7 @@ private:
                     value.vt = VT_I4;
                     value.lVal = static_cast<LONG>(service_->display_attribute_atom());
                     hr = attribute->SetValue(ec, range, &value);
+                    Trace("Composition: SetAttribute " + Hr(hr));
                     VariantClear(&value);
                     attribute->Release();
                 }
@@ -225,6 +239,13 @@ private:
         HRESULT hr = composition->GetRange(&range);
         if (SUCCEEDED(hr)) {
             hr = range->SetText(ec, 0, text_.c_str(), static_cast<LONG>(text_.size()));
+            if (SUCCEEDED(hr)) hr = range->Collapse(ec, TF_ANCHOR_END);
+            if (SUCCEEDED(hr)) {
+                TF_SELECTION selection{};
+                selection.range = range;
+                selection.style.ase = TF_AE_NONE;
+                hr = context_->SetSelection(ec, 1, &selection);
+            }
             range->Release();
         }
         if (SUCCEEDED(hr)) hr = composition->EndComposition(ec);
@@ -412,20 +433,35 @@ STDMETHODIMP HeshunTextService::ActivateEx(ITfThreadMgr* thread_mgr, TfClientId 
 
     ITfKeystrokeMgr* keystrokes = nullptr;
     hr = thread_mgr_->QueryInterface(IID_PPV_ARGS(&keystrokes));
+    Trace("ActivateEx: keystroke manager query " + Hr(hr) +
+          " client_id=" + std::to_string(client_id_) +
+          " sink=" + std::to_string(reinterpret_cast<uintptr_t>(static_cast<ITfKeyEventSink*>(this))));
     if (SUCCEEDED(hr)) {
         hr = keystrokes->AdviseKeyEventSink(client_id_, static_cast<ITfKeyEventSink*>(this), TRUE);
+        Trace("ActivateEx: advise key sink " + Hr(hr));
         keystrokes->Release();
     }
     if (SUCCEEDED(hr)) {
-        hr = thread_mgr_->QueryInterface(IID_PPV_ARGS(&langbar_mgr_));
-        if (SUCCEEDED(hr)) {
+        HRESULT langbar_hr = thread_mgr_->QueryInterface(IID_PPV_ARGS(&langbar_mgr_));
+        Trace("ActivateEx: language bar manager query " + Hr(langbar_hr));
+        if (SUCCEEDED(langbar_hr)) {
             auto* item = new (std::nothrow) HeshunLangBarItem(this);
-            if (!item) hr = E_OUTOFMEMORY;
+            if (!item) {
+                langbar_hr = E_OUTOFMEMORY;
+            }
             else {
-                hr = langbar_mgr_->AddItem(item);
-                if (SUCCEEDED(hr)) langbar_item_ = item;
+                langbar_hr = langbar_mgr_->AddItem(item);
+                Trace("ActivateEx: language bar add item " + Hr(langbar_hr));
+                if (SUCCEEDED(langbar_hr)) langbar_item_ = item;
                 item->Release();
             }
+            if (FAILED(langbar_hr)) {
+                Trace("ActivateEx: language bar unavailable; continuing without language bar");
+                langbar_mgr_->Release();
+                langbar_mgr_ = nullptr;
+            }
+        } else {
+            Trace("ActivateEx: language bar unavailable; continuing without language bar");
         }
     }
     if (FAILED(hr)) { Trace("ActivateEx: activation setup failed"); Deactivate(); }
@@ -579,12 +615,13 @@ HRESULT HeshunTextService::UpdateComposition(ITfContext* context) {
     // Composition state must be updated before the key callback returns. An
     // async request can remain queued while the host advances or ends the
     // composition, which loses no-candidate input from the preedit.
-    const HRESULT hr = context->RequestEditSession(client_id_, edit, TF_ES_SYNC | TF_ES_READWRITE, &session_hr);
+    const HRESULT hr = context->RequestEditSession(client_id_, edit, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &session_hr);
     edit->Release();
-    Trace(FAILED(hr) ? "UpdateComposition: sync RequestEditSession failed " + Hr(hr) :
-          FAILED(session_hr) ? "UpdateComposition: sync edit session failed " + Hr(session_hr) :
-                               "UpdateComposition: sync edit session complete");
-    return FAILED(hr) ? hr : session_hr;
+    Trace(FAILED(hr) ? "UpdateComposition: async RequestEditSession failed " + Hr(hr) :
+          session_hr == TF_S_ASYNC ? "UpdateComposition: async edit session queued" :
+          FAILED(session_hr) ? "UpdateComposition: async edit session failed " + Hr(session_hr) :
+                               "UpdateComposition: async edit session complete");
+    return FAILED(hr) ? hr : S_OK;
 }
 
 HRESULT HeshunTextService::CancelComposition(ITfContext* context) {
@@ -674,6 +711,12 @@ void HeshunTextService::ToggleInputMethodFromLangBar() {
 bool HeshunTextService::IsHandledKey(WPARAM key) const {
     if (key == VK_SHIFT) return true;
     if (key == VK_OEM_3 && (GetKeyState(VK_CONTROL) & 0x8000)) return true;
+    // Modifier shortcuts belong to the host application. In particular,
+    // Ctrl+V must not be interpreted as the letter 'v' by the input method.
+    if ((GetKeyState(VK_CONTROL) & 0x8000) ||
+        (GetKeyState(VK_MENU) & 0x8000) ||
+        (GetKeyState(VK_LWIN) & 0x8000) ||
+        (GetKeyState(VK_RWIN) & 0x8000)) return false;
     if (ascii_mode_) return false;
     if (key >= 'A' && key <= 'Z') return true;
     if (key >= 'a' && key <= 'z') return true;

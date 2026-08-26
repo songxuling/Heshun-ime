@@ -6,6 +6,8 @@
 use crate::pinyin::{normalize_pinyin, PinyinCandidate, PinyinDict};
 use serde::{Deserialize, Serialize};
 
+const MAX_COMPOSE_INPUT_LEN: usize = 64;
+
 /// 一个句子候选：词序列 + 总词频分。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SentenceCandidate {
@@ -22,6 +24,11 @@ pub fn compose(input: &str, dict: &PinyinDict, max_results: usize) -> Vec<Senten
     let input = normalize_pinyin(input);
     let n = input.len();
     if n == 0 {
+        return Vec::new();
+    }
+    // Keep arbitrary full-Pinyin input editable, but do not let the
+    // quadratic DP state grow without bound inside a host key callback.
+    if n > MAX_COMPOSE_INPUT_LEN {
         return Vec::new();
     }
 
@@ -133,5 +140,12 @@ mod tests {
         let d = sample_dict();
         assert!(compose("", &d, 5).is_empty());
         assert!(compose("xx", &d, 5).is_empty());
+    }
+
+    #[test]
+    fn compose_long_input_is_bounded() {
+        let d = sample_dict();
+        let input = "a".repeat(65);
+        assert!(compose(&input, &d, 9).is_empty());
     }
 }
