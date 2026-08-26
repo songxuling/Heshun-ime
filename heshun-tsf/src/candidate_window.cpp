@@ -149,8 +149,16 @@ size_t CandidateWindow::RowAtY(int y) const {
 void CandidateWindow::Paint(HDC dc) {
     RECT rect{};
     GetClientRect(window_, &rect);
-    FillRect(dc, &rect, CreateSolidBrush(kBackground));
-    FrameRect(dc, &rect, CreateSolidBrush(kBorder));
+    HBRUSH background = CreateSolidBrush(kBackground);
+    HBRUSH border = CreateSolidBrush(kBorder);
+    if (background) {
+        FillRect(dc, &rect, background);
+        DeleteObject(background);
+    }
+    if (border) {
+        FrameRect(dc, &rect, border);
+        DeleteObject(border);
+    }
 
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, kText);
@@ -176,7 +184,11 @@ void CandidateWindow::Paint(HDC dc) {
         line.bottom = line.top + row;
         if (i == selected_index_) {
             RECT selection = line;
-            FillRect(dc, &selection, CreateSolidBrush(kSelectionBackground));
+            HBRUSH selection_brush = CreateSolidBrush(kSelectionBackground);
+            if (selection_brush) {
+                FillRect(dc, &selection, selection_brush);
+                DeleteObject(selection_brush);
+            }
             SetTextColor(dc, kSelectionText);
         } else {
             SetTextColor(dc, kText);

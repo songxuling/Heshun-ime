@@ -721,7 +721,8 @@ bool HeshunTextService::IsHandledKey(WPARAM key) const {
     if (key >= 'A' && key <= 'Z') return true;
     if (key >= 'a' && key <= 'z') return true;
     if (key == VK_BACK) return HasPending();
-    if (key == VK_ESCAPE || key == VK_SPACE || key == VK_PRIOR || key == VK_NEXT || key == VK_UP || key == VK_DOWN || key == VK_RETURN) return true;
+    if (key == VK_RETURN || key == VK_SPACE) return HasPending();
+    if (key == VK_ESCAPE || key == VK_PRIOR || key == VK_NEXT || key == VK_UP || key == VK_DOWN) return true;
     return key >= '1' && key <= '9';
 }
 
@@ -860,10 +861,12 @@ STDMETHODIMP HeshunTextService::OnPreservedKey(ITfContext*, REFGUID, BOOL* eaten
 }
 
 STDMETHODIMP HeshunTextService::EnumDisplayAttributeInfo(IEnumTfDisplayAttributeInfo** result) {
+    Trace("DisplayAttribute: EnumDisplayAttributeInfo");
     return CreateHeshunDisplayAttributeEnum(result);
 }
 
 STDMETHODIMP HeshunTextService::GetDisplayAttributeInfo(REFGUID guid, ITfDisplayAttributeInfo** result) {
+    Trace("DisplayAttribute: GetDisplayAttributeInfo");
     if (!result) return E_INVALIDARG;
     *result = nullptr;
     if (guid != GUID_DISPLAYATTRIBUTE_HESHUN_PREEDIT) return E_INVALIDARG;
