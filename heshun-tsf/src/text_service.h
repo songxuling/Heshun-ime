@@ -8,6 +8,10 @@
 #include "candidate_window.h"
 #include "display_attributes.h"
 
+struct IHeshunLangBarStatus {
+    virtual void NotifyUpdate(DWORD flags = TF_LBI_TEXT | TF_LBI_ICON | TF_LBI_STATUS) = 0;
+};
+
 class HeshunTextService final : public ITfTextInputProcessorEx,
                                 public ITfKeyEventSink,
                                 public ITfDisplayAttributeProvider {
@@ -69,6 +73,8 @@ private:
     HRESULT CancelComposition(ITfContext* context);
     void UpdateCandidateWindow();
     void SaveUserDictionary();
+    HRESULT SetCompartmentDWORD(REFGUID guid, DWORD value);
+    void SyncKeyboardCompartments();
 
     volatile LONG ref_count_ = 1;
     ITfThreadMgr* thread_mgr_ = nullptr;
@@ -78,6 +84,7 @@ private:
     ITfComposition* composition_ = nullptr;
     ITfLangBarItemMgr* langbar_mgr_ = nullptr;
     ITfLangBarItem* langbar_item_ = nullptr;
+    IHeshunLangBarStatus* langbar_status_ = nullptr;
     std::unique_ptr<CandidateWindow> candidate_window_;
     ITfContext* active_context_ = nullptr;
     bool ascii_mode_ = false;

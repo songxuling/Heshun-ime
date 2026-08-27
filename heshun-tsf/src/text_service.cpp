@@ -1,5 +1,6 @@
 #include <windows.h>
 #include <msctf.h>
+#include <ocidl.h>
 #include <shlwapi.h>
 #include <string>
 #include <cstring>
@@ -7,10 +8,21 @@
 #include <filesystem>
 #include <sstream>
 #include <iomanip>
+#include <algorithm>
 #include <vector>
+#ifndef CONNECT_E_NOCONNECTION
+#define CONNECT_E_NOCONNECTION static_cast<HRESULT>(0x80040200L)
+#endif
+#ifndef CONNECT_E_ADVISELIMIT
+#define CONNECT_E_ADVISELIMIT static_cast<HRESULT>(0x80040201L)
+#endif
+#ifndef CONNECT_E_CANNOTCONNECT
+#define CONNECT_E_CANNOTCONNECT static_cast<HRESULT>(0x80040202L)
+#endif
 #include <strsafe.h>
 
 #include "guids.h"
+#include "resource.h"
 #include "text_service.h"
 
 extern HINSTANCE g_module_instance;
@@ -21,7 +33,47 @@ namespace {
 void Trace(const std::string& message);
 std::string Hr(HRESULT hr);
 
-class HeshunLangBarItem final : public ITfLangBarItemButton {
+HICON CreateModeIcon(bool ascii_mode) {
+    const wchar_t* text = ascii_mode ? L"EN" : L"CH";
+    const int width = std::max(16, GetSystemMetrics(SM_CXSMICON));
+    const int height = std::max(16, GetSystemMetrics(SM_CYSMICON));
+    HDC screen = GetDC(nullptr);
+    if (!screen) return nullptr;
+    HDC dc = CreateCompatibleDC(screen);
+    HBITMAP color = CreateCompatibleBitmap(screen, width, height);
+    HBITMAP mask = CreateBitmap(width, height, 1, 1, nullptr);
+    HICON icon = nullptr;
+    if (dc && color && mask) {
+        HGDIOBJ old = SelectObject(dc, color);
+        RECT rect{0, 0, width, height};
+        HBRUSH bg = CreateSolidBrush(ascii_mode ? RGB(96, 96, 96) : RGB(0, 120, 215));
+        FillRect(dc, &rect, bg ? bg : reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+        if (bg) DeleteObject(bg);
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, RGB(255, 255, 255));
+        HFONT font = CreateFontW(-MulDiv(9, GetDeviceCaps(screen, LOGPIXELSY), 72), 0, 0, 0, FW_BOLD,
+                                 FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                 CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
+                                 L"Microsoft YaHei UI");
+        HGDIOBJ old_font = font ? SelectObject(dc, font) : nullptr;
+        DrawTextW(dc, text, -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        if (old_font) SelectObject(dc, old_font);
+        if (font) DeleteObject(font);
+        SelectObject(dc, old);
+        ICONINFO info{};
+        info.fIcon = TRUE;
+        info.hbmColor = color;
+        info.hbmMask = mask;
+        icon = CreateIconIndirect(&info);
+    }
+    if (mask) DeleteObject(mask);
+    if (color) DeleteObject(color);
+    if (dc) DeleteDC(dc);
+    ReleaseDC(nullptr, screen);
+    return icon;
+}
+
+class HeshunLangBarItem final : public ITfLangBarItemButton, public ITfSource, public IHeshunLangBarStatus {
 public:
     explicit HeshunLangBarItem(HeshunTextService* service) : service_(service) {
         service_->AddRef();
@@ -37,6 +89,11 @@ public:
         *object = nullptr;
         if (riid == IID_IUnknown || riid == IID_ITfLangBarItem || riid == IID_ITfLangBarItemButton) {
             *object = static_cast<ITfLangBarItemButton*>(this);
+            AddRef();
+            return S_OK;
+        }
+        if (riid == IID_ITfSource) {
+            *object = static_cast<ITfSource*>(this);
             AddRef();
             return S_OK;
         }
@@ -62,16 +119,19 @@ public:
     STDMETHODIMP GetStatus(DWORD* status) override {
         if (!status) return E_INVALIDARG;
         Trace("LangBarItem: GetStatus");
-        *status = 0;
+        *status = status_;
         return S_OK;
     }
-    STDMETHODIMP Show(BOOL show) override { Trace(show ? "LangBarItem: Show" : "LangBarItem: Hide"); return S_OK; }
+    STDMETHODIMP Show(BOOL show) override {
+        status_ = show ? 0 : TF_LBI_STATUS_HIDDEN;
+        Trace(show ? "LangBarItem: Show" : "LangBarItem: Hide");
+        if (sink_) sink_->OnUpdate(TF_LBI_STATUS);
+        return S_OK;
+    }
     STDMETHODIMP GetTooltipString(BSTR* tooltip) override {
         if (!tooltip) return E_INVALIDARG;
         const wchar_t* mode = service_->ascii_mode() ? L"英文" : L"中文";
-        const wchar_t* schema = service_->IsPinyinMode() ? L"全拼" : L"郑码";
-        std::wstring value = std::wstring(L"heshun ") + mode + L" / " + schema +
-                             (service_->IsPinyinMode() ? L" (点击切换郑码)" : L" (点击切换全拼)");
+        std::wstring value = std::wstring(L"heshun ") + mode;
         *tooltip = SysAllocString(value.c_str());
         return *tooltip ? S_OK : E_OUTOFMEMORY;
     }
@@ -79,25 +139,52 @@ public:
         if (click == TF_LBI_CLK_LEFT) service_->ToggleInputMethodFromLangBar();
         return S_OK;
     }
-    STDMETHODIMP InitMenu(ITfMenu*) override { return E_NOTIMPL; }
-    STDMETHODIMP OnMenuSelect(UINT) override { return E_NOTIMPL; }
+    STDMETHODIMP InitMenu(ITfMenu*) override { Trace("LangBarItem: InitMenu"); return S_OK; }
+    STDMETHODIMP OnMenuSelect(UINT) override { return S_OK; }
     STDMETHODIMP GetIcon(HICON* icon) override {
         if (!icon) return E_INVALIDARG;
-        *icon = LoadIconW(g_module_instance, MAKEINTRESOURCEW(1));
+        *icon = CreateModeIcon(service_->ascii_mode());
         Trace(*icon ? "LangBarItem: GetIcon ok" : "LangBarItem: GetIcon failed");
-        return *icon ? S_OK : HRESULT_FROM_WIN32(GetLastError());
+        return *icon ? S_OK : E_FAIL;
     }
     STDMETHODIMP GetText(BSTR* text) override {
         if (!text) return E_INVALIDARG;
-        *text = SysAllocString(service_->ascii_mode() ? L"英" :
-                               (service_->IsPinyinMode() ? L"全" : L"郑"));
+        *text = SysAllocString(service_->ascii_mode() ? L"英" : L"中");
         Trace(*text ? "LangBarItem: GetText ok" : "LangBarItem: GetText failed");
         return *text ? S_OK : E_OUTOFMEMORY;
     }
 
+    STDMETHODIMP AdviseSink(REFIID riid, IUnknown* unknown, DWORD* cookie) override {
+        if (!unknown || !cookie) return E_INVALIDARG;
+        if (riid != IID_ITfLangBarItemSink) return CONNECT_E_CANNOTCONNECT;
+        if (sink_) return CONNECT_E_ADVISELIMIT;
+        ITfLangBarItemSink* sink = nullptr;
+        const HRESULT hr = unknown->QueryInterface(IID_PPV_ARGS(&sink));
+        if (FAILED(hr)) return hr;
+        sink_ = sink;
+        *cookie = kSinkCookie;
+        Trace("LangBarItem: AdviseSink ok");
+        return S_OK;
+    }
+
+    STDMETHODIMP UnadviseSink(DWORD cookie) override {
+        if (cookie != kSinkCookie || !sink_) return CONNECT_E_NOCONNECTION;
+        sink_->Release();
+        sink_ = nullptr;
+        Trace("LangBarItem: UnadviseSink ok");
+        return S_OK;
+    }
+
+    void NotifyUpdate(DWORD flags = TF_LBI_TEXT | TF_LBI_ICON | TF_LBI_STATUS) override {
+        if (sink_) sink_->OnUpdate(flags);
+    }
+
 private:
+    static constexpr DWORD kSinkCookie = 1;
+    DWORD status_ = 0;
     LONG ref_count_ = 1;
     HeshunTextService* service_ = nullptr;
+    ITfLangBarItemSink* sink_ = nullptr;
 };
 
 class CommitEditSession final : public ITfEditSession {
@@ -490,7 +577,11 @@ STDMETHODIMP HeshunTextService::ActivateEx(ITfThreadMgr* thread_mgr, TfClientId 
             else {
                 langbar_hr = langbar_mgr_->AddItem(item);
                 Trace("ActivateEx: language bar add item " + Hr(langbar_hr));
-                if (SUCCEEDED(langbar_hr)) langbar_item_ = item;
+                if (SUCCEEDED(langbar_hr)) {
+                    langbar_item_ = item;
+                    langbar_status_ = item;
+                    langbar_status_->NotifyUpdate();
+                }
                 item->Release();
             }
             if (FAILED(langbar_hr)) {
@@ -503,7 +594,10 @@ STDMETHODIMP HeshunTextService::ActivateEx(ITfThreadMgr* thread_mgr, TfClientId 
         }
     }
     if (FAILED(hr)) { Trace("ActivateEx: activation setup failed"); Deactivate(); }
-    else Trace("ActivateEx: key sink and language bar advised");
+    else {
+        SyncKeyboardCompartments();
+        Trace("ActivateEx: key sink and language bar advised");
+    }
     return hr;
 }
 
@@ -511,6 +605,7 @@ STDMETHODIMP HeshunTextService::Deactivate() {
     if (langbar_mgr_) {
         if (langbar_item_) langbar_mgr_->RemoveItem(langbar_item_);
         langbar_item_ = nullptr;
+        langbar_status_ = nullptr;
         langbar_mgr_->Release();
         langbar_mgr_ = nullptr;
     }
@@ -602,6 +697,42 @@ bool HeshunTextService::DispatchRuntime(unsigned int opcode, long long value, Ca
     Trace(event_log.str());
     hs_runtime_result_free(result);
     return consumed;
+}
+
+HRESULT HeshunTextService::SetCompartmentDWORD(REFGUID guid, DWORD value) {
+    if (!thread_mgr_) return E_UNEXPECTED;
+    ITfCompartmentMgr* compartments = nullptr;
+    HRESULT hr = thread_mgr_->QueryInterface(IID_PPV_ARGS(&compartments));
+    if (FAILED(hr)) {
+        Trace("Compartment: manager query failed " + Hr(hr));
+        return hr;
+    }
+    ITfCompartment* compartment = nullptr;
+    hr = compartments->GetCompartment(guid, &compartment);
+    compartments->Release();
+    if (FAILED(hr)) {
+        Trace("Compartment: get failed " + Hr(hr));
+        return hr;
+    }
+    VARIANT var{};
+    var.vt = VT_I4;
+    var.lVal = static_cast<LONG>(value);
+    hr = compartment->SetValue(client_id_, &var);
+    compartment->Release();
+    Trace("Compartment: set value=" + std::to_string(value) + " hr=" + Hr(hr));
+    return hr;
+}
+
+void HeshunTextService::SyncKeyboardCompartments() {
+    const DWORD open = 1;
+    const DWORD conversion = ascii_mode_ ? TF_CONVERSIONMODE_ALPHANUMERIC : TF_CONVERSIONMODE_NATIVE;
+    const HRESULT open_hr = SetCompartmentDWORD(GUID_COMPARTMENT_KEYBOARD_OPENCLOSE, open);
+    const HRESULT conversion_hr = SetCompartmentDWORD(GUID_COMPARTMENT_KEYBOARD_INPUTMODE_CONVERSION, conversion);
+    std::ostringstream out;
+    out << "Compartment: sync mode=" << (ascii_mode_ ? "English" : "Chinese")
+        << " open=" << open << " open_hr=" << Hr(open_hr)
+        << " conversion=" << conversion << " conversion_hr=" << Hr(conversion_hr);
+    Trace(out.str());
 }
 
 void HeshunTextService::SaveUserDictionary() {
@@ -729,6 +860,8 @@ void HeshunTextService::ToggleAsciiMode(ITfContext* context) {
     CancelComposition(context);
     if (candidate_window_) candidate_window_->Hide();
     Trace(ascii_mode_ ? "Mode: English" : "Mode: Chinese");
+    SyncKeyboardCompartments();
+    if (langbar_status_) langbar_status_->NotifyUpdate();
 }
 
 void HeshunTextService::ToggleInputMethod(ITfContext* context) {
@@ -741,6 +874,7 @@ void HeshunTextService::ToggleInputMethod(ITfContext* context) {
         return;
     }
     Trace(pinyin_mode_ ? "Input method: Pinyin" : "Input method: Zhengma");
+    if (langbar_status_) langbar_status_->NotifyUpdate();
 }
 
 void HeshunTextService::ToggleInputMethodFromLangBar() {
