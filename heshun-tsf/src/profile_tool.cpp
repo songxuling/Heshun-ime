@@ -22,9 +22,21 @@ HRESULT Register(const wchar_t* dll_path) {
         hr = CoCreateInstance(CLSID_TF_CategoryMgr, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&categories));
         if (FAILED(hr)) std::wcerr << L"Create category manager failed: 0x" << std::hex << static_cast<unsigned long>(hr) << L"\n";
         if (SUCCEEDED(hr)) {
-            hr = categories->RegisterCategory(CLSID_HeshunTextService, GUID_TFCAT_TIP_KEYBOARD,
-                                              CLSID_HeshunTextService);
-            if (FAILED(hr)) std::wcerr << L"Register keyboard category failed: 0x" << std::hex << static_cast<unsigned long>(hr) << L"\n";
+            const GUID categories_to_register[] = {
+                GUID_TFCAT_CATEGORY_OF_TIP,
+                GUID_TFCAT_TIP_KEYBOARD,
+                GUID_TFCAT_TIPCAP_INPUTMODECOMPARTMENT,
+                GUID_TFCAT_TIPCAP_SYSTRAYSUPPORT,
+            };
+            for (const GUID& category : categories_to_register) {
+                hr = categories->RegisterCategory(CLSID_HeshunTextService, category,
+                                                  CLSID_HeshunTextService);
+                if (FAILED(hr)) {
+                    std::wcerr << L"Register TSF category failed: 0x" << std::hex
+                               << static_cast<unsigned long>(hr) << L"\n";
+                    break;
+                }
+            }
             categories->Release();
         }
     }
@@ -70,8 +82,16 @@ HRESULT Unregister() {
                                     GUID_PROFILE_HESHUN_LEGACY_PINYIN);
     ITfCategoryMgr* categories = nullptr;
     if (SUCCEEDED(CoCreateInstance(CLSID_TF_CategoryMgr, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&categories)))) {
-        categories->UnregisterCategory(CLSID_HeshunTextService, GUID_TFCAT_TIP_KEYBOARD,
-                                       CLSID_HeshunTextService);
+        const GUID categories_to_unregister[] = {
+            GUID_TFCAT_CATEGORY_OF_TIP,
+            GUID_TFCAT_TIP_KEYBOARD,
+            GUID_TFCAT_TIPCAP_INPUTMODECOMPARTMENT,
+            GUID_TFCAT_TIPCAP_SYSTRAYSUPPORT,
+        };
+        for (const GUID& category : categories_to_unregister) {
+            categories->UnregisterCategory(CLSID_HeshunTextService, category,
+                                           CLSID_HeshunTextService);
+        }
         categories->Release();
     }
     hr = profiles->Unregister(CLSID_HeshunTextService);

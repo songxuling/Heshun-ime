@@ -110,7 +110,7 @@ public:
         Trace("LangBarItem: GetInfo");
         ZeroMemory(info, sizeof(*info));
         info->clsidService = CLSID_HeshunTextService;
-        info->guidItem = GUID_LANGBAR_ITEM_HESHUN;
+        info->guidItem = GUID_LBI_INPUTMODE_HESHUN;
         info->dwStyle = TF_LBI_STYLE_BTN_BUTTON | TF_LBI_STYLE_BTN_MENU | TF_LBI_STYLE_SHOWNINTRAY;
         info->ulSort = 1;
         StringCchCopyW(info->szDescription, ARRAYSIZE(info->szDescription), L"heshun");
@@ -513,6 +513,8 @@ STDMETHODIMP HeshunTextService::QueryInterface(REFIID riid, void** object) {
         *object = static_cast<ITfTextInputProcessorEx*>(this);
     } else if (riid == IID_ITfKeyEventSink) {
         *object = static_cast<ITfKeyEventSink*>(this);
+    } else if (riid == IID_ITfActiveLanguageProfileNotifySink) {
+        *object = static_cast<ITfActiveLanguageProfileNotifySink*>(this);
     } else if (riid == IID_ITfDisplayAttributeProvider) {
         *object = static_cast<ITfDisplayAttributeProvider*>(this);
     } else {
@@ -580,7 +582,9 @@ STDMETHODIMP HeshunTextService::ActivateEx(ITfThreadMgr* thread_mgr, TfClientId 
                 if (SUCCEEDED(langbar_hr)) {
                     langbar_item_ = item;
                     langbar_status_ = item;
-                    langbar_status_->NotifyUpdate();
+                    const HRESULT show_hr = langbar_item_->Show(TRUE);
+                    Trace("ActivateEx: language bar show " + Hr(show_hr));
+                    if (SUCCEEDED(show_hr)) langbar_status_->NotifyUpdate();
                 }
                 item->Release();
             }
@@ -593,6 +597,10 @@ STDMETHODIMP HeshunTextService::ActivateEx(ITfThreadMgr* thread_mgr, TfClientId 
             Trace("ActivateEx: language bar unavailable; continuing without language bar");
         }
     }
+    if (SUCCEEDED(hr)) {
+        const HRESULT profile_sink_hr = InitActiveLanguageProfileNotifySink();
+        Trace("ActivateEx: active profile sink advise " + Hr(profile_sink_hr));
+    }
     if (FAILED(hr)) { Trace("ActivateEx: activation setup failed"); Deactivate(); }
     else {
         SyncKeyboardCompartments();
@@ -602,8 +610,12 @@ STDMETHODIMP HeshunTextService::ActivateEx(ITfThreadMgr* thread_mgr, TfClientId 
 }
 
 STDMETHODIMP HeshunTextService::Deactivate() {
+    UninitActiveLanguageProfileNotifySink();
     if (langbar_mgr_) {
-        if (langbar_item_) langbar_mgr_->RemoveItem(langbar_item_);
+        if (langbar_item_) {
+            const HRESULT remove_hr = langbar_mgr_->RemoveItem(langbar_item_);
+            Trace("Deactivate: language bar remove " + Hr(remove_hr));
+        }
         langbar_item_ = nullptr;
         langbar_status_ = nullptr;
         langbar_mgr_->Release();
@@ -620,6 +632,58 @@ STDMETHODIMP HeshunTextService::Deactivate() {
     FreeEngine();
     if (thread_mgr_) { thread_mgr_->Release(); thread_mgr_ = nullptr; }
     client_id_ = TF_CLIENTID_NULL;
+    return S_OK;
+}
+
+HRESULT HeshunTextService::InitActiveLanguageProfileNotifySink() {
+    if (!thread_mgr_) return E_UNEXPECTED;
+    if (active_profile_sink_cookie_ != TF_INVALID_COOKIE) return S_FALSE;
+    ITfSource* source = nullptr;
+    HRESULT hr = thread_mgr_->QueryInterface(IID_PPV_ARGS(&source));
+    if (SUCCEEDED(hr)) {
+        hr = source->AdviseSink(IID_ITfActiveLanguageProfileNotifySink,
+                                static_cast<ITfActiveLanguageProfileNotifySink*>(this),
+                                &active_profile_sink_cookie_);
+        source->Release();
+    }
+    if (FAILED(hr)) active_profile_sink_cookie_ = TF_INVALID_COOKIE;
+    return hr;
+}
+
+void HeshunTextService::UninitActiveLanguageProfileNotifySink() {
+    if (!thread_mgr_ || active_profile_sink_cookie_ == TF_INVALID_COOKIE) return;
+    ITfSource* source = nullptr;
+    if (SUCCEEDED(thread_mgr_->QueryInterface(IID_PPV_ARGS(&source)))) {
+        const HRESULT hr = source->UnadviseSink(active_profile_sink_cookie_);
+        Trace("Deactivate: active profile sink unadvise " + Hr(hr));
+        source->Release();
+    }
+    active_profile_sink_cookie_ = TF_INVALID_COOKIE;
+}
+
+void HeshunTextService::ShowLanguageBar(bool show) {
+    if (!langbar_item_) return;
+    const HRESULT hr = langbar_item_->Show(show ? TRUE : FALSE);
+    Trace(std::string("LanguageProfile: language bar ") +
+          (show ? "show " : "hide ") + Hr(hr));
+    if (SUCCEEDED(hr) && langbar_status_) langbar_status_->NotifyUpdate(TF_LBI_STATUS);
+}
+
+STDMETHODIMP HeshunTextService::OnActivated(REFCLSID clsid, REFGUID profile, BOOL activated) {
+    // TSF sends the notification for the profile transition.  The matching
+    // service receives its own deactivation before another TIP is activated;
+    // hide on that transition and only show for this exact Heshun profile.
+    if (clsid == CLSID_HeshunTextService) {
+        const bool is_our_profile = profile == GUID_PROFILE_HESHUN;
+        Trace(std::string("LanguageProfile: heshun ") +
+              (activated ? "activated" : "deactivated") +
+              (is_our_profile ? " profile" : " other profile"));
+        ShowLanguageBar(activated && is_our_profile);
+        if (activated && is_our_profile) {
+            SyncKeyboardCompartments();
+            if (langbar_status_) langbar_status_->NotifyUpdate();
+        }
+    }
     return S_OK;
 }
 

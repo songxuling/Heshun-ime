@@ -101,13 +101,22 @@ extern "C" STDAPI DllRegisterServer() {
     hr = CoCreateInstance(CLSID_TF_CategoryMgr, nullptr, CLSCTX_INPROC_SERVER,
                            IID_PPV_ARGS(&categories));
     if (SUCCEEDED(hr)) {
-        hr = categories->RegisterCategory(CLSID_HeshunTextService,
-                                          GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER,
-                                          CLSID_HeshunTextService);
-        if (SUCCEEDED(hr)) {
+        // Match WeaselTSF's TSF capability declaration.  In particular,
+        // SYSTRAYSUPPORT and INPUTMODECOMPARTMENT tell Windows that this TIP
+        // owns an input-mode state in addition to its fixed profile icon.
+        const GUID categories_to_register[] = {
+            GUID_TFCAT_CATEGORY_OF_TIP,
+            GUID_TFCAT_TIP_KEYBOARD,
+            GUID_TFCAT_TIPCAP_INPUTMODECOMPARTMENT,
+            GUID_TFCAT_TIPCAP_SYSTRAYSUPPORT,
+            GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER,
+            GUID_TFCAT_DISPLAYATTRIBUTEPROPERTY,
+        };
+        for (const GUID& category : categories_to_register) {
             hr = categories->RegisterCategory(CLSID_HeshunTextService,
-                                              GUID_TFCAT_DISPLAYATTRIBUTEPROPERTY,
+                                              category,
                                               CLSID_HeshunTextService);
+            if (FAILED(hr)) break;
         }
         categories->Release();
     }
@@ -118,12 +127,19 @@ extern "C" STDAPI DllUnregisterServer() {
     ITfCategoryMgr* categories = nullptr;
     if (SUCCEEDED(CoCreateInstance(CLSID_TF_CategoryMgr, nullptr, CLSCTX_INPROC_SERVER,
                                     IID_PPV_ARGS(&categories)))) {
-        categories->UnregisterCategory(CLSID_HeshunTextService,
-                                       GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER,
-                                       CLSID_HeshunTextService);
-        categories->UnregisterCategory(CLSID_HeshunTextService,
-                                       GUID_TFCAT_DISPLAYATTRIBUTEPROPERTY,
-                                       CLSID_HeshunTextService);
+        const GUID categories_to_unregister[] = {
+            GUID_TFCAT_CATEGORY_OF_TIP,
+            GUID_TFCAT_TIP_KEYBOARD,
+            GUID_TFCAT_TIPCAP_INPUTMODECOMPARTMENT,
+            GUID_TFCAT_TIPCAP_SYSTRAYSUPPORT,
+            GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER,
+            GUID_TFCAT_DISPLAYATTRIBUTEPROPERTY,
+        };
+        for (const GUID& category : categories_to_unregister) {
+            categories->UnregisterCategory(CLSID_HeshunTextService,
+                                           category,
+                                           CLSID_HeshunTextService);
+        }
         categories->Release();
     }
     const std::wstring base = L"Software\\Classes\\CLSID\\" + ClsidString();

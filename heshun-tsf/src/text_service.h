@@ -14,6 +14,7 @@ struct IHeshunLangBarStatus {
 
 class HeshunTextService final : public ITfTextInputProcessorEx,
                                 public ITfKeyEventSink,
+                                public ITfActiveLanguageProfileNotifySink,
                                 public ITfDisplayAttributeProvider {
 public:
     HeshunTextService();
@@ -40,6 +41,9 @@ public:
     STDMETHODIMP OnTestKeyUp(ITfContext* context, WPARAM wparam, LPARAM lparam, BOOL* eaten) override;
     STDMETHODIMP OnKeyUp(ITfContext* context, WPARAM wparam, LPARAM lparam, BOOL* eaten) override;
     STDMETHODIMP OnPreservedKey(ITfContext* context, REFGUID guid, BOOL* eaten) override;
+
+    // ITfActiveLanguageProfileNotifySink
+    STDMETHODIMP OnActivated(REFCLSID clsid, REFGUID profile, BOOL activated) override;
 
     // ITfDisplayAttributeProvider
     STDMETHODIMP EnumDisplayAttributeInfo(IEnumTfDisplayAttributeInfo** result) override;
@@ -75,11 +79,15 @@ private:
     void SaveUserDictionary();
     HRESULT SetCompartmentDWORD(REFGUID guid, DWORD value);
     void SyncKeyboardCompartments();
+    HRESULT InitActiveLanguageProfileNotifySink();
+    void UninitActiveLanguageProfileNotifySink();
+    void ShowLanguageBar(bool show);
 
     volatile LONG ref_count_ = 1;
     ITfThreadMgr* thread_mgr_ = nullptr;
     TfClientId client_id_ = TF_CLIENTID_NULL;
     DWORD key_sink_cookie_ = TF_INVALID_COOKIE;
+    DWORD active_profile_sink_cookie_ = TF_INVALID_COOKIE;
     hs_handle* runtime_ = nullptr;
     ITfComposition* composition_ = nullptr;
     ITfLangBarItemMgr* langbar_mgr_ = nullptr;
