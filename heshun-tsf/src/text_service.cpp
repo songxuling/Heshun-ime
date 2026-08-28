@@ -274,14 +274,21 @@ public:
 private:
     HRESULT Update(TfEditCookie ec) {
         Trace("CompositionEditSession: update begin");
-        if (text_.empty()) return End(ec, true);
+        if (text_.empty()) {
+            Trace("Composition: update skipped empty text");
+            return End(ec, true);
+        }
         ITfComposition* composition = service_->composition();
         HRESULT hr = S_OK;
         if (!composition) {
             TF_SELECTION selection{};
             ULONG fetched = 0;
             hr = context_->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &selection, &fetched);
-            if (FAILED(hr) || fetched != 1 || !selection.range) return FAILED(hr) ? hr : E_FAIL;
+            if (FAILED(hr) || fetched != 1 || !selection.range) {
+                Trace("Composition: GetSelection " + Hr(FAILED(hr) ? hr : E_FAIL) +
+                      " fetched=" + std::to_string(fetched));
+                return FAILED(hr) ? hr : E_FAIL;
+            }
             ITfContextComposition* contexts = nullptr;
             hr = context_->QueryInterface(IID_PPV_ARGS(&contexts));
             if (SUCCEEDED(hr)) {
@@ -289,6 +296,7 @@ private:
                 contexts->Release();
             }
             selection.range->Release();
+            Trace("Composition: StartComposition " + Hr(hr));
             if (FAILED(hr)) return hr;
             service_->SetComposition(composition);
             composition->Release();
@@ -296,6 +304,7 @@ private:
         }
         ITfRange* range = nullptr;
         hr = composition->GetRange(&range);
+        Trace("Composition: GetRange " + Hr(hr));
         if (SUCCEEDED(hr)) {
             hr = range->SetText(ec, 0, text_.c_str(), static_cast<LONG>(text_.size()));
             Trace("Composition: SetText " + Hr(hr));
@@ -311,7 +320,11 @@ private:
                     Trace("Composition: SetAttribute " + Hr(hr));
                     VariantClear(&value);
                     attribute->Release();
+                } else {
+                    Trace("Composition: GetAttributeProperty " + Hr(hr));
                 }
+            } else if (SUCCEEDED(hr)) {
+                Trace("Composition: display attribute atom unavailable");
             }
             if (SUCCEEDED(hr)) {
                 ITfRange* caret_range = nullptr;

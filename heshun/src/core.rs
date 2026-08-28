@@ -9,6 +9,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+// A TSF runtime result is copied across the C ABI and then rendered by a
+// native candidate window. Keep that payload bounded even when a dictionary
+// has a very large exact-match bucket.
+const MAX_SNAPSHOT_CANDIDATES: usize = 64;
+
 pub type SchemaId = String;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -379,7 +384,7 @@ impl CoreRuntime {
         let mut session = engine.session();
         session.restore_state_at(self.state.pending.clone(), self.state.sentence_candidates.clone(), self.state.cursor);
         session.ascii_mode = self.state.ascii_mode;
-        session.candidates(usize::MAX).into_iter().enumerate().map(|(ordinal, candidate)| CandidateView {
+        session.candidates(MAX_SNAPSHOT_CANDIDATES).into_iter().enumerate().map(|(ordinal, candidate)| CandidateView {
             key: CandidateKey { source: if engine.is_table() { CandidateSource::Table } else { CandidateSource::ScriptExact }, ordinal: ordinal as u32 },
             annotation: candidate.code,
             word: candidate.word,
@@ -437,6 +442,35 @@ mod tests {
         let snapshot = runtime.snapshot();
         assert_eq!(snapshot.pending, "wox");
         assert!(snapshot.candidates.items.is_empty());
+        assert!(snapshot.status.composing);
+    }
+
+    #[test]
+    fn script_candidate_snapshot_has_a_bounded_total() {
+        let mut store = EngineStore::new();
+        let entries = (0..80)
+            .map(|i| ("a".to_string(), format!("候选{i}"), 80 - i))
+            .collect();
+        store.insert("script", Engine::new(SchemaKind::Script {
+            dict: PinyinDict::from_entries(entries),
+        }));
+        let mut runtime = CoreRuntime::new(Arc::new(store), "script").unwrap();
+        runtime.dispatch(InputEvent::Text('a'));
+        let snapshot = runtime.snapshot();
+        assert!(snapshot.candidates.total <= MAX_SNAPSHOT_CANDIDATES);
+    }
+
+    #[test]
+    fn long_full_pinyin_stays_editable_while_candidates_are_suppressed() {
+        let mut runtime = CoreRuntime::new(store(), "script").unwrap();
+        let input = "a".repeat(65);
+        for ch in input.chars() {
+            runtime.dispatch(InputEvent::Text(ch));
+        }
+        let snapshot = runtime.snapshot();
+        assert_eq!(snapshot.pending, input);
+        assert!(snapshot.candidates.items.is_empty());
+        assert_eq!(snapshot.candidates.total, 0);
         assert!(snapshot.status.composing);
     }
 
