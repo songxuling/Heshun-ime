@@ -9,6 +9,7 @@
 //! 读取 pending / candidates，消费 FeedResult。
 
 use crate::composer::{self, SentenceCandidate};
+use crate::core::CandidateSource;
 use crate::dict::Dict;
 use crate::pinyin::PinyinDict;
 use crate::processor::Processor;
@@ -16,6 +17,7 @@ use crate::punctuator::Punctuator;
 use crate::reverse_lookup::ReverseLookup;
 use crate::user_dict::UserDict;
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 // ── 公共类型 ──────────────────────────────────────────
@@ -34,7 +36,8 @@ pub enum FeedResult {
 #[derive(Debug, Clone)]
 pub struct Candidate {
     pub word: String,
-    pub code: String,  // 形码=编码，音码=拼音
+    pub code: String, // 形码=编码，音码=拼音
+    pub source: CandidateSource,
 }
 
 // ── 翻译器抽象 ─────────────────────────────────────────
@@ -49,9 +52,7 @@ pub enum SchemaKind {
         auto_select_pattern: Option<String>,
     },
     /// 音码方案（全拼/双拼）。双拼反向映射通过 PinyinDict.zrm() 获取。
-    Script {
-        dict: PinyinDict,
-    },
+    Script { dict: PinyinDict },
 }
 
 // ── 引擎 ──────────────────────────────────────────────
@@ -112,7 +113,9 @@ impl Engine {
 
     /// 保存当前用户词典；未启用用户词典时是成功的空操作。
     pub fn save_user_dict(&self) -> Result<(), String> {
-        let Some(path) = self.user_dict_path() else { return Ok(()) };
+        let Some(path) = self.user_dict_path() else {
+            return Ok(());
+        };
         self.save_user_dict_to(path)
     }
 
@@ -120,8 +123,11 @@ impl Engine {
     /// platform shell.
     pub fn save_user_dict_to(&self, path: &Path) -> Result<(), String> {
         let borrowed = self.user_dict.borrow();
-        let Some(dict) = borrowed.as_ref() else { return Ok(()) };
-        dict.save(path).map_err(|e| format!("保存用户词典 {} 失败: {e}", path.display()))
+        let Some(dict) = borrowed.as_ref() else {
+            return Ok(());
+        };
+        dict.save(path)
+            .map_err(|e| format!("保存用户词典 {} 失败: {e}", path.display()))
     }
 
     /// 从 schema.yaml 加载引擎。
@@ -178,9 +184,10 @@ impl Engine {
                     let rl_dict = crate::pinyin::PinyinDict::load(&rl_data)?;
                     let prefix = sc.reverse_lookup.prefix.as_deref().unwrap_or("`");
                     let prefix_char = prefix.chars().next().unwrap_or('`');
-                    engine = engine.with_reverse_lookup(
-                        crate::reverse_lookup::ReverseLookup::new(rl_dict, prefix_char)
-                    );
+                    engine = engine.with_reverse_lookup(crate::reverse_lookup::ReverseLookup::new(
+                        rl_dict,
+                        prefix_char,
+                    ));
                 }
             }
         }
@@ -237,11 +244,21 @@ impl<'a> Session<'a> {
     }
 
     /// 外部包装类型访问内部状态（供 GUI 等使用）。
-    pub fn buf_mut(&mut self) -> &mut String { &mut self.buf }
-    pub fn set_buf(&mut self, b: String) { self.buf = b; }
-    pub fn set_sentence_cands(&mut self, sc: Vec<SentenceCandidate>) { self.sentence_cands = sc; }
+    pub fn buf_mut(&mut self) -> &mut String {
+        &mut self.buf
+    }
+    pub fn set_buf(&mut self, b: String) {
+        self.buf = b;
+    }
+    pub fn set_sentence_cands(&mut self, sc: Vec<SentenceCandidate>) {
+        self.sentence_cands = sc;
+    }
     pub fn take_state(&mut self) -> (String, Vec<SentenceCandidate>, usize) {
-        (std::mem::take(&mut self.buf), std::mem::take(&mut self.sentence_cands), self.cursor)
+        (
+            std::mem::take(&mut self.buf),
+            std::mem::take(&mut self.sentence_cands),
+            self.cursor,
+        )
     }
     pub fn restore_state(&mut self, buf: String, sc: Vec<SentenceCandidate>) {
         self.restore_state_at(buf, sc, usize::MAX);
@@ -251,18 +268,29 @@ impl<'a> Session<'a> {
         self.buf = buf;
         self.sentence_cands = sc;
     }
-    pub fn cursor(&self) -> usize { self.cursor }
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
     pub fn move_cursor(&mut self, delta: i32) {
-        self.cursor = (self.cursor as i32 + delta).clamp(0, self.buf.chars().count() as i32) as usize;
+        self.cursor =
+            (self.cursor as i32 + delta).clamp(0, self.buf.chars().count() as i32) as usize;
     }
     pub fn feed_at_cursor(&mut self, ch: char) -> FeedResult {
         if self.cursor == self.buf.chars().count() {
             let result = self.feed(ch);
-            if matches!(result, FeedResult::Waiting) { self.cursor += 1; }
-            else if matches!(result, FeedResult::Committed(_)) { self.cursor = 0; }
+            if matches!(result, FeedResult::Waiting) {
+                self.cursor += 1;
+            } else if matches!(result, FeedResult::Committed(_)) {
+                self.cursor = 0;
+            }
             return result;
         }
-        let byte = self.buf.char_indices().nth(self.cursor).map(|(i, _)| i).unwrap_or(self.buf.len());
+        let byte = self
+            .buf
+            .char_indices()
+            .nth(self.cursor)
+            .map(|(i, _)| i)
+            .unwrap_or(self.buf.len());
         self.buf.insert(byte, ch);
         self.cursor += 1;
         self.sentence_cands.clear();
@@ -272,7 +300,9 @@ impl<'a> Session<'a> {
 
     /// 是否处于反查模式（pending 以反查前缀开头）。
     pub fn in_reverse_mode(&self) -> bool {
-        self.engine.reverse_lookup.as_ref()
+        self.engine
+            .reverse_lookup
+            .as_ref()
             .map(|rl| self.buf.starts_with(rl.prefix()))
             .unwrap_or(false)
     }
@@ -300,8 +330,13 @@ impl<'a> Session<'a> {
                 let mut out = Vec::new();
                 let limit = if limit == 0 { usize::MAX } else { limit };
                 for cand in rl.dict().exact(&input) {
-                    if out.len() >= limit { break; }
-                    let codes = self.engine.table_dict.as_ref()
+                    if out.len() >= limit {
+                        break;
+                    }
+                    let codes = self
+                        .engine
+                        .table_dict
+                        .as_ref()
                         .map(|dict| dict.codes_for_word(&cand.word))
                         .unwrap_or_default();
                     let code = if codes.is_empty() {
@@ -309,17 +344,36 @@ impl<'a> Session<'a> {
                     } else {
                         codes.join("/")
                     };
-                    out.push(Candidate { word: cand.word, code });
+                    out.push(Candidate {
+                        word: cand.word,
+                        code,
+                        source: CandidateSource::Reverse,
+                    });
                 }
                 for sc in &self.sentence_cands {
-                    if out.len() >= limit { break; }
+                    if out.len() >= limit {
+                        break;
+                    }
                     let w = sc.words.join("");
-                    if out.iter().any(|c| c.word == w) { continue; }
-                    let codes = self.engine.table_dict.as_ref()
+                    if out.iter().any(|c| c.word == w) {
+                        continue;
+                    }
+                    let codes = self
+                        .engine
+                        .table_dict
+                        .as_ref()
                         .map(|dict| dict.codes_for_word(&w))
                         .unwrap_or_default();
-                    let code = if codes.is_empty() { "—".to_owned() } else { codes.join("/") };
-                    out.push(Candidate { word: w, code });
+                    let code = if codes.is_empty() {
+                        "—".to_owned()
+                    } else {
+                        codes.join("/")
+                    };
+                    out.push(Candidate {
+                        word: w,
+                        code,
+                        source: CandidateSource::Reverse,
+                    });
                 }
                 return out;
             }
@@ -327,28 +381,55 @@ impl<'a> Session<'a> {
         let mut out = match &self.engine.schema {
             SchemaKind::Table { dict, .. } => {
                 let cs = dict.prefix(&self.buf, if limit == 0 { 9 } else { limit });
-                cs.iter().map(|c| Candidate {
-                    word: c.word.to_string(), code: c.code.clone(),
-                }).collect()
+                cs.iter()
+                    .map(|c| Candidate {
+                        word: c.word.to_string(),
+                        code: c.code.clone(),
+                        source: CandidateSource::Table,
+                    })
+                    .collect()
             }
             SchemaKind::Script { dict, .. } => {
                 let mut out = Vec::new();
+                let mut seen = HashSet::new();
                 let input = self.normalized_input();
                 let limit = if limit == 0 { usize::MAX } else { limit };
                 for cand in dict.exact(&input) {
-                    if out.len() >= limit { break; }
-                    out.push(Candidate { word: cand.word, code: input.clone() });
+                    if out.len() >= limit {
+                        break;
+                    }
+                    if seen.insert(cand.word.clone()) {
+                        out.push(Candidate {
+                            word: cand.word,
+                            code: input.clone(),
+                            source: CandidateSource::ScriptExact,
+                        });
+                    }
                 }
                 for sc in &self.sentence_cands {
-                    if out.len() >= limit { break; }
+                    if out.len() >= limit {
+                        break;
+                    }
                     let word = sc.words.join("");
-                    if out.iter().any(|c| c.word == word) { continue; }
-                    out.push(Candidate { word, code: input.clone() });
+                    if seen.insert(word.clone()) {
+                        out.push(Candidate {
+                            word,
+                            code: input.clone(),
+                            source: CandidateSource::ScriptSentence,
+                        });
+                    }
                 }
                 for cand in dict.prefix(&input) {
-                    if out.len() >= limit { break; }
-                    if out.iter().any(|c| c.word == cand.word) { continue; }
-                    out.push(Candidate { word: cand.word, code: input.clone() });
+                    if out.len() >= limit {
+                        break;
+                    }
+                    if seen.insert(cand.word.clone()) {
+                        out.push(Candidate {
+                            word: cand.word,
+                            code: input.clone(),
+                            source: CandidateSource::ScriptPrefix,
+                        });
+                    }
                 }
                 out
             }
@@ -417,8 +498,14 @@ impl<'a> Session<'a> {
                 dict,
                 max_code_len,
                 auto_select,
-                ..
-            } => self.feed_table(dict, c, *max_code_len, *auto_select),
+                auto_select_pattern,
+            } => self.feed_table(
+                dict,
+                c,
+                *max_code_len,
+                *auto_select,
+                auto_select_pattern.as_deref(),
+            ),
             SchemaKind::Script { dict } => self.feed_script(dict, c),
         }
     }
@@ -456,6 +543,7 @@ impl<'a> Session<'a> {
         c: char,
         max_code_len: usize,
         auto_select: bool,
+        auto_select_pattern: Option<&str>,
     ) -> FeedResult {
         if self.buf.len() >= max_code_len {
             // A table schema has a normal code length, but rejecting every
@@ -467,7 +555,14 @@ impl<'a> Session<'a> {
         }
         self.buf.push(c);
 
-        if self.buf.len() == max_code_len && auto_select {
+        let pattern_matches = auto_select_pattern
+            .map(|pattern| regex::Regex::new(pattern).map(|re| re.is_match(&self.buf)).unwrap_or(false))
+            .unwrap_or(false);
+        let should_auto_select = auto_select
+            && auto_select_pattern
+                .map(|_| pattern_matches)
+                .unwrap_or(self.buf.len() == max_code_len);
+        if should_auto_select {
             let cands = dict.prefix(&self.buf, 2);
             if cands.is_empty() {
                 self.buf.pop();
@@ -507,11 +602,7 @@ impl<'a> Session<'a> {
         }
     }
 
-    fn feed_script(
-        &mut self,
-        dict: &PinyinDict,
-        c: char,
-    ) -> FeedResult {
+    fn feed_script(&mut self, dict: &PinyinDict, c: char) -> FeedResult {
         self.buf.push(c);
 
         let zrm = dict.zrm();
@@ -524,7 +615,9 @@ impl<'a> Session<'a> {
 
         // 双拼下，末尾奇数键会被忽略（尚未构成完整音节），
         // 此时 input 可能为空或与上一状态相同——仍需接受按键。
-        // 检查是否有任何候选（完整词或部分前缀）
+        // 检查是否有任何候选（完整词、组句或部分前缀）。
+        // 对齐 Rime 的 script translator 思路：整串即使没有直接词条，
+        // 只要能被分段组句，也必须保留句子候选，而不是提前判成无候选。
         let exact = dict.exact(&input);
         let prefix = dict.prefix(&input);
 
@@ -537,17 +630,14 @@ impl<'a> Session<'a> {
             return FeedResult::Rejected;
         }
 
-        if exact.is_empty() && prefix.is_empty() {
-            // 音码输入始终保留用户输入的字母。当前串没有候选时，
-            // 只隐藏候选窗口，继续允许用户输入、退格或清空修正。
-            self.sentence_cands.clear();
-            self.sentence_offset = 0;
-            return FeedResult::Waiting;
-        }
-
-        // 运行 DP 组句获取整句候选
         self.sentence_cands = composer::compose(&input, dict, 9);
         self.sentence_offset = 0;
+
+        if exact.is_empty() && prefix.is_empty() && self.sentence_cands.is_empty() {
+            // 音码输入始终保留用户输入的字母。当前串没有候选时，
+            // 只隐藏候选窗口，继续允许用户输入、退格或清空修正。
+            return FeedResult::Waiting;
+        }
 
         FeedResult::Waiting
     }
@@ -563,7 +653,9 @@ impl<'a> Session<'a> {
         let code_for_learn;
         // 候选顺序与 candidates() 保持一致
         let result = if self.in_reverse_mode() {
-            let Some(rl) = &self.engine.reverse_lookup else { return None };
+            let Some(rl) = &self.engine.reverse_lookup else {
+                return None;
+            };
             let query = self.reverse_query().unwrap_or("");
             code_for_learn = query.to_string();
             let input = crate::pinyin::normalize_pinyin(query);
@@ -598,7 +690,13 @@ impl<'a> Session<'a> {
                             let sci = idx - sent_offset;
                             Some(self.sentence_cands[sci].words.join(""))
                         } else {
-                            None
+                            let prefix_offset = sent_offset + self.sentence_cands.len();
+                            let prefix: Vec<_> = dict.prefix(&input);
+                            if idx < prefix_offset + prefix.len() {
+                                Some(prefix[idx - prefix_offset].word.clone())
+                            } else {
+                                None
+                            }
                         }
                     }
                 }
@@ -619,7 +717,10 @@ impl<'a> Session<'a> {
 
     /// 直接按候选文本上屏。用于外壳在用户词典排序后按可见候选选择。
     pub fn select_word(&mut self, word: &str) -> Option<String> {
-        let candidate = self.candidates(usize::MAX).into_iter().find(|c| c.word == word)?;
+        let candidate = self
+            .candidates(usize::MAX)
+            .into_iter()
+            .find(|c| c.word == word)?;
         let code = if self.in_reverse_mode() {
             self.reverse_query().unwrap_or("").to_owned()
         } else {
@@ -644,9 +745,26 @@ impl<'a> Session<'a> {
     /// 退格。
     pub fn backspace(&mut self) -> bool {
         self.sentence_cands.clear();
-        if self.cursor == 0 { return false; }
-        let start = self.buf.char_indices().nth(self.cursor - 1).map(|(i, _)| i).unwrap_or(0);
-        let end = self.buf.char_indices().nth(self.cursor).map(|(i, _)| i).unwrap_or(self.buf.len());
+        if self.cursor == 0 && !self.buf.is_empty() {
+            // `feed` is the low-level append API; keep direct callers' caret
+            // at the end so backspace behaves like Rime's editor.
+            self.cursor = self.buf.chars().count();
+        }
+        if self.cursor == 0 {
+            return false;
+        }
+        let start = self
+            .buf
+            .char_indices()
+            .nth(self.cursor - 1)
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        let end = self
+            .buf
+            .char_indices()
+            .nth(self.cursor)
+            .map(|(i, _)| i)
+            .unwrap_or(self.buf.len());
         self.buf.replace_range(start..end, "");
         self.cursor -= 1;
         true
@@ -682,10 +800,14 @@ mod tests {
         std::fs::create_dir_all(&schemas).unwrap();
         let dict_path = schemas.join("table.bin");
         let mut dict_data = Vec::new();
-        Dict::from_entries(vec![(encode_code("a").unwrap(), "一".into())]).save(&mut dict_data).unwrap();
+        Dict::from_entries(vec![(encode_code("a").unwrap(), "一".into())])
+            .save(&mut dict_data)
+            .unwrap();
         std::fs::write(&dict_path, dict_data).unwrap();
         let schema_path = schemas.join("test.schema.yaml");
-        std::fs::write(&schema_path, r#"
+        std::fs::write(
+            &schema_path,
+            r#"
 schema:
   schema_id: test
   name: Test
@@ -695,7 +817,9 @@ dictionary:
   file: table.bin
 user_dict:
   file: ../data/test.userdb.json
-"#).unwrap();
+"#,
+        )
+        .unwrap();
         let engine = Engine::from_schema_file(&schema_path).unwrap();
         let mut session = engine.session();
         session.feed('a');
@@ -733,10 +857,25 @@ user_dict:
     }
 
     #[test]
+    fn table_auto_select_pattern_commits_short_unique_code() {
+        let e = Engine::new(SchemaKind::Table {
+            dict: Dict::from_entries(vec![(encode_code("aa").unwrap(), "一下".into())]),
+            max_code_len: 4,
+            auto_select: true,
+            auto_select_pattern: Some("^[a-z]{2}$".into()),
+        });
+        let mut s = e.session();
+        assert_eq!(s.feed('a'), FeedResult::Waiting);
+        assert_eq!(s.feed('a'), FeedResult::Committed("一下".into()));
+    }
+
+    #[test]
     fn table_invalid_4th_key_rejected() {
         let e = table_engine();
         let mut s = e.session();
-        for c in ['j', 'i', 'v'] { s.feed(c); }
+        for c in ['j', 'i', 'v'] {
+            s.feed(c);
+        }
         assert_eq!(s.feed('z'), FeedResult::Rejected);
         assert_eq!(s.pending(), "jiv");
     }
@@ -750,7 +889,9 @@ user_dict:
             auto_select_pattern: None,
         });
         let mut s = e.session();
-        for c in ['j', 'i', 'v', 'v'] { assert_eq!(s.feed(c), FeedResult::Waiting); }
+        for c in ['j', 'i', 'v', 'v'] {
+            assert_eq!(s.feed(c), FeedResult::Waiting);
+        }
         assert_eq!(s.feed('a'), FeedResult::Waiting);
         assert_eq!(s.pending(), "jivva");
         assert!(s.backspace());
@@ -801,7 +942,9 @@ user_dict:
     fn script_composition() {
         let e = script_engine();
         let mut s = e.session();
-        for c in "zhonggu".chars() { s.feed(c); }
+        for c in "zhonggu".chars() {
+            s.feed(c);
+        }
         // 此时应能匹配到 "中国"
         let cands = s.candidates(5);
         assert!(!cands.is_empty());
@@ -825,7 +968,8 @@ user_dict:
     fn backspace_and_clear_unified() {
         let e = script_engine();
         let mut s = e.session();
-        s.feed('w'); s.feed('o');
+        s.feed('w');
+        s.feed('o');
         assert!(s.backspace());
         assert_eq!(s.pending(), "w");
         s.clear();

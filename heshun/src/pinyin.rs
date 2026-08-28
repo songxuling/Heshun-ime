@@ -129,21 +129,21 @@ impl PinyinDict {
     /// 供 script_translator 做 DP 组句时调用。
     pub fn matches_prefix(&self, input: &str) -> Vec<(usize, PinyinCandidate)> {
         let input = normalize_pinyin(input);
+        // Query each possible code prefix by binary search. A single
+        // lexicographic interval cannot cover shorter codes (e.g. `zhong`)
+        // that sort before the full input (`zhongguo`).
         let mut out = Vec::new();
-        // 找所有 code 是 input 前缀的词条（code 短于等于 input 且匹配）
-        for i in 0..self.codes.len() {
-            let c = &self.codes[i];
-            if c.len() > input.len() {
-                continue;
-            }
-            if input.starts_with(c.as_str()) {
+        for end in 1..=input.len() {
+            let code = &input[..end];
+            let lo = self.codes.partition_point(|c| c.as_str() < code);
+            let hi = self.codes.partition_point(|c| c.as_str() <= code);
+            for i in lo..hi {
                 out.push((
-                    c.len(),
+                    end,
                     PinyinCandidate { word: self.word(i).to_string(), weight: self.weights[i] },
                 ));
             }
         }
-        // 按词频降序排（保持 DP 选择最优）
         out.sort_by(|a, b| b.1.weight.cmp(&a.1.weight));
         out
     }

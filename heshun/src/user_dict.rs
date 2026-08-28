@@ -18,17 +18,28 @@ pub struct UserDict {
 
 impl UserDict {
     pub fn new() -> Self {
-        UserDict { counts: HashMap::new() }
+        UserDict {
+            counts: HashMap::new(),
+        }
     }
 
     /// 记录一次选词。
     pub fn learn(&mut self, code: &str, word: &str) {
-        *self.counts.entry(code.to_string()).or_default().entry(word.to_string()).or_insert(0) += 1;
+        *self
+            .counts
+            .entry(code.to_string())
+            .or_default()
+            .entry(word.to_string())
+            .or_insert(0) += 1;
     }
 
     /// 查询某编码下某字词的选中次数。
     pub fn count(&self, code: &str, word: &str) -> u32 {
-        self.counts.get(code).and_then(|m| m.get(word)).copied().unwrap_or(0)
+        self.counts
+            .get(code)
+            .and_then(|m| m.get(word))
+            .copied()
+            .unwrap_or(0)
     }
 
     /// 某编码下是否有用户记录。
@@ -38,7 +49,9 @@ impl UserDict {
 
     /// 某编码下的用户选词，按次数降序返回 (字词, 次数)。
     pub fn words_for(&self, code: &str) -> Vec<(String, u32)> {
-        let Some(m) = self.counts.get(code) else { return Vec::new() };
+        let Some(m) = self.counts.get(code) else {
+            return Vec::new();
+        };
         let mut v: Vec<(String, u32)> = m.iter().map(|(w, c)| (w.clone(), *c)).collect();
         v.sort_by(|a, b| b.1.cmp(&a.1));
         v
@@ -57,9 +70,8 @@ impl UserDict {
     /// 从 JSON 文件加载。
     pub fn load(path: &std::path::Path) -> std::io::Result<Self> {
         let text = std::fs::read_to_string(path)?;
-        let counts: HashMap<String, HashMap<String, u32>> =
-            serde_json::from_str(&text)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let counts: HashMap<String, HashMap<String, u32>> = serde_json::from_str(&text)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
         Ok(UserDict { counts })
     }
 
@@ -69,10 +81,17 @@ impl UserDict {
 
     /// 按用户选择次数稳定提升候选；没有学习记录的候选保持原顺序。
     pub fn reorder_candidates(&self, code: &str, candidates: &mut Vec<Candidate>) {
-        candidates.sort_by(|a, b| {
-            self.count(code, &b.word)
-                .cmp(&self.count(code, &a.word))
-        });
+        let mut ranked: Vec<(usize, u32)> = candidates
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (i, self.count(code, &c.word)))
+            .collect();
+        ranked.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        let mut reordered = Vec::with_capacity(candidates.len());
+        for (idx, _) in ranked {
+            reordered.push(candidates[idx].clone());
+        }
+        *candidates = reordered;
     }
 }
 
@@ -108,8 +127,16 @@ mod tests {
         ud.learn("zhong", "钟");
         ud.learn("zhong", "钟");
         let mut candidates = vec![
-            Candidate { word: "中".into(), code: "zhong".into() },
-            Candidate { word: "钟".into(), code: "zhong".into() },
+            Candidate {
+                word: "中".into(),
+                code: "zhong".into(),
+                source: crate::core::CandidateSource::ScriptExact,
+            },
+            Candidate {
+                word: "钟".into(),
+                code: "zhong".into(),
+                source: crate::core::CandidateSource::ScriptExact,
+            },
         ];
         ud.reorder_candidates("zhong", &mut candidates);
         assert_eq!(candidates[0].word, "钟");
@@ -131,7 +158,8 @@ mod tests {
         let mut ud = UserDict::new();
         ud.learn("aa", "一下");
         ud.learn("aa", "一下");
-        let path = std::env::temp_dir().join(format!("hs_userdict_test_{}.json", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("hs_userdict_test_{}.json", std::process::id()));
         ud.save(&path).unwrap();
         let ud2 = UserDict::load(&path).unwrap();
         assert_eq!(ud2.count("aa", "一下"), 2);

@@ -155,7 +155,9 @@ pub struct EngineStore {
 
 impl EngineStore {
     pub fn new() -> Self {
-        Self { schemas: HashMap::new() }
+        Self {
+            schemas: HashMap::new(),
+        }
     }
 
     pub fn insert(&mut self, id: impl Into<SchemaId>, engine: Engine) {
@@ -172,7 +174,9 @@ impl EngineStore {
 }
 
 impl Default for EngineStore {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 pub struct CoreRuntime {
@@ -187,13 +191,23 @@ impl CoreRuntime {
         if !store.contains(&schema) {
             return Err(CoreError::UnknownSchema(schema));
         }
-        Ok(Self { store, state: CoreState::new(schema), page_size: 9 })
+        Ok(Self {
+            store,
+            state: CoreState::new(schema),
+            page_size: 9,
+        })
     }
 
-    pub fn state(&self) -> &CoreState { &self.state }
-    pub fn snapshot(&self) -> ContextSnapshot { self.build_snapshot() }
+    pub fn state(&self) -> &CoreState {
+        &self.state
+    }
+    pub fn snapshot(&self) -> ContextSnapshot {
+        self.build_snapshot()
+    }
 
-    pub fn schema_id(&self) -> &str { &self.state.schema }
+    pub fn schema_id(&self) -> &str {
+        &self.state.schema
+    }
 
     pub fn save_user_dict(&self) -> Result<(), String> {
         let Some(engine) = self.store.get(&self.state.schema) else {
@@ -227,19 +241,40 @@ impl CoreRuntime {
                     return self.result(disposition, committed, CompositionAction::End, error);
                 };
                 let mut session = engine.session();
-                session.restore_state_at(self.state.pending.clone(), self.state.sentence_candidates.clone(), self.state.cursor);
+                session.restore_state_at(
+                    self.state.pending.clone(),
+                    self.state.sentence_candidates.clone(),
+                    self.state.cursor,
+                );
                 session.ascii_mode = self.state.ascii_mode;
-                if let FeedResult::Committed(text) = session.feed_at_cursor(ch) { committed = Some(text); }
+                if let FeedResult::Committed(text) = session.feed_at_cursor(ch) {
+                    committed = Some(text);
+                }
                 self.save_session(&mut session);
-                composition = if self.state.pending.is_empty() { CompositionAction::End } else { CompositionAction::Update };
+                composition = if self.state.pending.is_empty() {
+                    CompositionAction::End
+                } else {
+                    CompositionAction::Update
+                };
             }
             InputEvent::Backspace => {
                 if self.state.pending.is_empty() {
-                    return self.result(EventDisposition::PassedThrough, None, CompositionAction::End, None);
+                    return self.result(
+                        EventDisposition::PassedThrough,
+                        None,
+                        CompositionAction::End,
+                        None,
+                    );
                 }
-                self.with_session(|session| { session.backspace(); });
+                self.with_session(|session| {
+                    session.backspace();
+                });
                 self.reset_candidate_view();
-                composition = if self.state.pending.is_empty() { CompositionAction::End } else { CompositionAction::Update };
+                composition = if self.state.pending.is_empty() {
+                    CompositionAction::End
+                } else {
+                    CompositionAction::Update
+                };
             }
             InputEvent::Delete => disposition = EventDisposition::PassedThrough,
             InputEvent::Escape | InputEvent::Reset => {
@@ -265,20 +300,32 @@ impl CoreRuntime {
             }
             InputEvent::Select(key) => {
                 committed = self.select_key(key, &mut error);
-                if committed.is_some() { self.state.clear_composition(); composition = CompositionAction::End; }
+                if committed.is_some() {
+                    self.state.clear_composition();
+                    composition = CompositionAction::End;
+                }
             }
             InputEvent::MoveSelection(delta) => {
                 let page = self.build_snapshot().candidates;
                 if !page.items.is_empty() {
-                    let current = page.selected.and_then(|key| page.items.iter().position(|item| item.key == key)).unwrap_or(0);
-                    let next = (current as i32 + delta).rem_euclid(page.items.len() as i32) as usize;
+                    let current = page
+                        .selected
+                        .and_then(|key| page.items.iter().position(|item| item.key == key))
+                        .unwrap_or(0);
+                    let next =
+                        (current as i32 + delta).rem_euclid(page.items.len() as i32) as usize;
                     self.state.selected = Some(page.items[next].key);
                 }
             }
             InputEvent::MoveCursor(delta) => {
                 self.state.cursor = (self.state.cursor as i32 + delta)
-                    .clamp(0, self.state.pending.chars().count() as i32) as usize;
-                composition = if self.state.pending.is_empty() { CompositionAction::End } else { CompositionAction::Keep };
+                    .clamp(0, self.state.pending.chars().count() as i32)
+                    as usize;
+                composition = if self.state.pending.is_empty() {
+                    CompositionAction::End
+                } else {
+                    CompositionAction::Keep
+                };
             }
             InputEvent::Page(delta) => self.move_page(delta),
             InputEvent::ToggleAscii => self.set_ascii(!self.state.ascii_mode),
@@ -297,8 +344,20 @@ impl CoreRuntime {
         self.result(disposition, committed, composition, error)
     }
 
-    fn result(&self, disposition: EventDisposition, committed: Option<String>, composition: CompositionAction, error: Option<CoreError>) -> CommandResult {
-        CommandResult { disposition, committed, composition, snapshot: self.build_snapshot(), error }
+    fn result(
+        &self,
+        disposition: EventDisposition,
+        committed: Option<String>,
+        composition: CompositionAction,
+        error: Option<CoreError>,
+    ) -> CommandResult {
+        CommandResult {
+            disposition,
+            committed,
+            composition,
+            snapshot: self.build_snapshot(),
+            error,
+        }
     }
 
     fn set_ascii(&mut self, value: bool) {
@@ -313,7 +372,8 @@ impl CoreRuntime {
 
     fn selected_or_first(&self) -> Option<CandidateKey> {
         let page = self.build_snapshot().candidates;
-        page.selected.or_else(|| page.items.first().map(|item| item.key))
+        page.selected
+            .or_else(|| page.items.first().map(|item| item.key))
     }
 
     fn select_key(&mut self, key: CandidateKey, error: &mut Option<CoreError>) -> Option<String> {
@@ -329,15 +389,24 @@ impl CoreRuntime {
     fn move_page(&mut self, delta: i32) {
         let total = self.build_snapshot().candidates.total;
         let pages = total.div_ceil(self.page_size);
-        let next = (self.state.page_index as i32 + delta).clamp(0, pages.saturating_sub(1) as i32) as usize;
+        let next = (self.state.page_index as i32 + delta).clamp(0, pages.saturating_sub(1) as i32)
+            as usize;
         self.state.page_index = next;
         self.state.selected = None;
     }
 
     fn with_session<T>(&mut self, f: impl FnOnce(&mut crate::engine::Session<'_>) -> T) -> T {
-        let engine = self.store.get(&self.state.schema).cloned().expect("validated schema");
+        let engine = self
+            .store
+            .get(&self.state.schema)
+            .cloned()
+            .expect("validated schema");
         let mut session = engine.session();
-        session.restore_state_at(self.state.pending.clone(), self.state.sentence_candidates.clone(), self.state.cursor);
+        session.restore_state_at(
+            self.state.pending.clone(),
+            self.state.sentence_candidates.clone(),
+            self.state.cursor,
+        );
         session.ascii_mode = self.state.ascii_mode;
         let result = f(&mut session);
         self.save_session(&mut session);
@@ -357,7 +426,10 @@ impl CoreRuntime {
         let start = (self.state.page_index * self.page_size).min(total);
         let end = (start + self.page_size).min(total);
         let items = all[start..end].to_vec();
-        let selected = self.state.selected.filter(|key| items.iter().any(|item| item.key == *key));
+        let selected = self
+            .state
+            .selected
+            .filter(|key| items.iter().any(|item| item.key == *key));
         ContextSnapshot {
             pending: self.state.pending.clone(),
             cursor: self.state.cursor,
@@ -380,16 +452,30 @@ impl CoreRuntime {
     }
 
     fn all_candidates(&self) -> Vec<CandidateView> {
-        let Some(engine) = self.store.get(&self.state.schema) else { return Vec::new() };
+        let Some(engine) = self.store.get(&self.state.schema) else {
+            return Vec::new();
+        };
         let mut session = engine.session();
-        session.restore_state_at(self.state.pending.clone(), self.state.sentence_candidates.clone(), self.state.cursor);
+        session.restore_state_at(
+            self.state.pending.clone(),
+            self.state.sentence_candidates.clone(),
+            self.state.cursor,
+        );
         session.ascii_mode = self.state.ascii_mode;
-        session.candidates(MAX_SNAPSHOT_CANDIDATES).into_iter().enumerate().map(|(ordinal, candidate)| CandidateView {
-            key: CandidateKey { source: if engine.is_table() { CandidateSource::Table } else { CandidateSource::ScriptExact }, ordinal: ordinal as u32 },
-            annotation: candidate.code,
-            word: candidate.word,
-            label: (ordinal % self.page_size + 1).to_string(),
-        }).collect()
+        session
+            .candidates(MAX_SNAPSHOT_CANDIDATES)
+            .into_iter()
+            .enumerate()
+            .map(|(ordinal, candidate)| CandidateView {
+                key: CandidateKey {
+                    source: candidate.source,
+                    ordinal: ordinal as u32,
+                },
+                annotation: candidate.code,
+                word: candidate.word,
+                label: (ordinal % self.page_size + 1).to_string(),
+            })
+            .collect()
     }
 }
 
@@ -402,14 +488,27 @@ mod tests {
 
     fn store() -> Arc<EngineStore> {
         let mut store = EngineStore::new();
-        store.insert("table", Engine::new(SchemaKind::Table {
-            dict: Dict::from_entries(vec![(encode_code("a").unwrap(), "一".into()), (encode_code("ab").unwrap(), "丁".into())]),
-            max_code_len: 4, auto_select: false, auto_select_pattern: None,
-        }));
-        store.insert("script", Engine::new(SchemaKind::Script { dict: PinyinDict::from_entries(vec![
-            ("wo".into(), "我".into(), 100),
-            ("zhong".into(), "中".into(), 100),
-        ]) }));
+        store.insert(
+            "table",
+            Engine::new(SchemaKind::Table {
+                dict: Dict::from_entries(vec![
+                    (encode_code("a").unwrap(), "一".into()),
+                    (encode_code("ab").unwrap(), "丁".into()),
+                ]),
+                max_code_len: 4,
+                auto_select: false,
+                auto_select_pattern: None,
+            }),
+        );
+        store.insert(
+            "script",
+            Engine::new(SchemaKind::Script {
+                dict: PinyinDict::from_entries(vec![
+                    ("wo".into(), "我".into(), 100),
+                    ("zhong".into(), "中".into(), 100),
+                ]),
+            }),
+        );
         Arc::new(store)
     }
 
@@ -436,9 +535,36 @@ mod tests {
     }
 
     #[test]
+    fn script_snapshot_preserves_candidate_origins() {
+        let mut store = EngineStore::new();
+        store.insert(
+            "script",
+            Engine::new(SchemaKind::Script {
+                dict: PinyinDict::from_entries(vec![
+                    ("zhong".into(), "中".into(), 100),
+                    ("guo".into(), "国".into(), 90),
+                ]),
+            }),
+        );
+        let mut runtime = CoreRuntime::new(Arc::new(store), "script").unwrap();
+        for ch in "zhongguo".chars() {
+            runtime.dispatch(InputEvent::Text(ch));
+        }
+        let page = runtime.snapshot().candidates;
+        assert!(
+            page.items
+                .iter()
+                .any(|item| item.key.source == CandidateSource::ScriptSentence),
+            "组句候选必须保留 ScriptSentence 来源"
+        );
+    }
+
+    #[test]
     fn unmatched_full_pinyin_remains_editable_without_old_candidates() {
         let mut runtime = CoreRuntime::new(store(), "script").unwrap();
-        for ch in "wox".chars() { runtime.dispatch(InputEvent::Text(ch)); }
+        for ch in "wox".chars() {
+            runtime.dispatch(InputEvent::Text(ch));
+        }
         let snapshot = runtime.snapshot();
         assert_eq!(snapshot.pending, "wox");
         assert!(snapshot.candidates.items.is_empty());
@@ -451,9 +577,12 @@ mod tests {
         let entries = (0..80)
             .map(|i| ("a".to_string(), format!("候选{i}"), 80 - i))
             .collect();
-        store.insert("script", Engine::new(SchemaKind::Script {
-            dict: PinyinDict::from_entries(entries),
-        }));
+        store.insert(
+            "script",
+            Engine::new(SchemaKind::Script {
+                dict: PinyinDict::from_entries(entries),
+            }),
+        );
         let mut runtime = CoreRuntime::new(Arc::new(store), "script").unwrap();
         runtime.dispatch(InputEvent::Text('a'));
         let snapshot = runtime.snapshot();
@@ -477,9 +606,14 @@ mod tests {
     #[test]
     fn invalid_candidate_key_preserves_composition() {
         let mut runtime = CoreRuntime::new(store(), "script").unwrap();
-        for ch in "wo".chars() { runtime.dispatch(InputEvent::Text(ch)); }
+        for ch in "wo".chars() {
+            runtime.dispatch(InputEvent::Text(ch));
+        }
         let before = runtime.snapshot();
-        let invalid = CandidateKey { source: CandidateSource::Table, ordinal: 999 };
+        let invalid = CandidateKey {
+            source: CandidateSource::Table,
+            ordinal: 999,
+        };
         let result = runtime.dispatch(InputEvent::Select(invalid));
         assert_eq!(result.committed, None);
         assert_eq!(result.error, Some(CoreError::InvalidCandidate(invalid)));
@@ -493,12 +627,15 @@ mod tests {
         let entries = (0..20)
             .map(|i| (crate::dict::encode_code("a").unwrap(), format!("字{i}")))
             .collect();
-        store.insert("table", Engine::new(SchemaKind::Table {
-            dict: Dict::from_entries(entries),
-            max_code_len: 4,
-            auto_select: false,
-            auto_select_pattern: None,
-        }));
+        store.insert(
+            "table",
+            Engine::new(SchemaKind::Table {
+                dict: Dict::from_entries(entries),
+                max_code_len: 4,
+                auto_select: false,
+                auto_select_pattern: None,
+            }),
+        );
         let mut runtime = CoreRuntime::new(Arc::new(store), "table").unwrap();
         runtime.dispatch(InputEvent::Text('a'));
         runtime.dispatch(InputEvent::Page(1));
@@ -511,7 +648,9 @@ mod tests {
     #[test]
     fn cursor_moves_and_inserts_at_middle() {
         let mut runtime = CoreRuntime::new(store(), "script").unwrap();
-        for ch in "wox".chars() { runtime.dispatch(InputEvent::Text(ch)); }
+        for ch in "wox".chars() {
+            runtime.dispatch(InputEvent::Text(ch));
+        }
         assert_eq!(runtime.snapshot().cursor, 3);
         runtime.dispatch(InputEvent::MoveCursor(-2));
         assert_eq!(runtime.snapshot().cursor, 1);
@@ -523,7 +662,9 @@ mod tests {
     #[test]
     fn cursor_backspace_deletes_before_cursor() {
         let mut runtime = CoreRuntime::new(store(), "script").unwrap();
-        for ch in "wox".chars() { runtime.dispatch(InputEvent::Text(ch)); }
+        for ch in "wox".chars() {
+            runtime.dispatch(InputEvent::Text(ch));
+        }
         runtime.dispatch(InputEvent::MoveCursor(-1));
         runtime.dispatch(InputEvent::Backspace);
         assert_eq!(runtime.snapshot().pending, "wx");
@@ -535,7 +676,9 @@ mod tests {
         let mut runtime = CoreRuntime::new(store(), "script").unwrap();
         runtime.dispatch(InputEvent::MoveCursor(-1));
         assert_eq!(runtime.snapshot().cursor, 0);
-        for ch in "wo".chars() { runtime.dispatch(InputEvent::Text(ch)); }
+        for ch in "wo".chars() {
+            runtime.dispatch(InputEvent::Text(ch));
+        }
         runtime.dispatch(InputEvent::MoveCursor(99));
         assert_eq!(runtime.snapshot().cursor, 2);
     }
@@ -555,8 +698,12 @@ mod tests {
         let store = store();
         let mut first = CoreRuntime::new(store.clone(), "script").unwrap();
         let mut replay = CoreRuntime::new(store, "script").unwrap();
-        for event in events { first.dispatch(event); }
-        for event in decoded { replay.dispatch(event); }
+        for event in events {
+            first.dispatch(event);
+        }
+        for event in decoded {
+            replay.dispatch(event);
+        }
         assert_eq!(first.snapshot(), replay.snapshot());
     }
 
