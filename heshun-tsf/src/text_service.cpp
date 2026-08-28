@@ -281,26 +281,44 @@ private:
         ITfComposition* composition = service_->composition();
         HRESULT hr = S_OK;
         if (!composition) {
-            TF_SELECTION selection{};
-            ULONG fetched = 0;
-            hr = context_->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &selection, &fetched);
-            if (FAILED(hr) || fetched != 1 || !selection.range) {
-                Trace("Composition: GetSelection " + Hr(FAILED(hr) ? hr : E_FAIL) +
-                      " fetched=" + std::to_string(fetched));
+            // Use the same insertion-range acquisition as WeaselTSF.  A
+            // normal GetSelection range can accept SetText/SetValue yet not
+            // be treated by the host as the composition's display range.
+            ITfInsertAtSelection* insert_at_selection = nullptr;
+            hr = context_->QueryInterface(IID_PPV_ARGS(&insert_at_selection));
+            if (FAILED(hr)) {
+                Trace("Composition: query insert-at-selection " + Hr(hr));
+                return hr;
+            }
+            ITfRange* insertion_range = nullptr;
+            hr = insert_at_selection->InsertTextAtSelection(ec, TF_IAS_QUERYONLY,
+                                                              nullptr, 0,
+                                                              &insertion_range);
+            insert_at_selection->Release();
+            if (FAILED(hr) || !insertion_range) {
+                Trace("Composition: query insertion range " + Hr(FAILED(hr) ? hr : E_FAIL));
                 return FAILED(hr) ? hr : E_FAIL;
             }
             ITfContextComposition* contexts = nullptr;
             hr = context_->QueryInterface(IID_PPV_ARGS(&contexts));
             if (SUCCEEDED(hr)) {
-                hr = contexts->StartComposition(ec, selection.range, nullptr, &composition);
+                hr = contexts->StartComposition(ec, insertion_range,
+                                                static_cast<ITfCompositionSink*>(service_),
+                                                &composition);
                 contexts->Release();
             }
-            selection.range->Release();
+            insertion_range->Release();
             Trace("Composition: StartComposition " + Hr(hr));
             if (FAILED(hr)) return hr;
             service_->SetComposition(composition);
             composition->Release();
-            composition = service_->composition();
+            // Match WeaselTSF's lifecycle: finish the StartComposition edit
+            // session before issuing the session that writes preedit text and
+            // display attributes.  Some hosts return S_OK for SetText and
+            // SetValue in the same callback but do not render the attribute.
+            Trace("Composition: start complete; queueing separate update");
+            service_->QueueCompositionUpdate(context_);
+            return S_OK;
         }
         ITfRange* range = nullptr;
         hr = composition->GetRange(&range);
@@ -530,6 +548,8 @@ STDMETHODIMP HeshunTextService::QueryInterface(REFIID riid, void** object) {
         *object = static_cast<ITfActiveLanguageProfileNotifySink*>(this);
     } else if (riid == IID_ITfDisplayAttributeProvider) {
         *object = static_cast<ITfDisplayAttributeProvider*>(this);
+    } else if (riid == IID_ITfCompositionSink) {
+        *object = static_cast<ITfCompositionSink*>(this);
     } else {
         return E_NOINTERFACE;
     }
@@ -833,6 +853,10 @@ void HeshunTextService::ClearComposition() {
         composition_->Release();
         composition_ = nullptr;
     }
+}
+
+void HeshunTextService::QueueCompositionUpdate(ITfContext* context) {
+    UpdateComposition(context);
 }
 
 void HeshunTextService::FreeEngine() {
@@ -1141,6 +1165,14 @@ STDMETHODIMP HeshunTextService::GetDisplayAttributeInfo(REFGUID guid, ITfDisplay
     auto* info = new (std::nothrow) HeshunDisplayAttributeInfo();
     if (!info) return E_OUTOFMEMORY;
     *result = info;
+    return S_OK;
+}
+
+STDMETHODIMP HeshunTextService::OnCompositionTerminated(TfEditCookie, ITfComposition* composition) {
+    if (composition_ && composition == composition_) {
+        Trace("Composition: terminated by host");
+        ClearComposition();
+    }
     return S_OK;
 }
 

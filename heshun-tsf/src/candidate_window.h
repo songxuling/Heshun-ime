@@ -48,4 +48,5 @@ private:
     unsigned int cursor_ = 0;
     size_t selected_index_ = 0;
     bool keyboard_selection_ = false;
+    bool caret_visible_ = true;
 };

@@ -15,7 +15,8 @@ struct IHeshunLangBarStatus {
 class HeshunTextService final : public ITfTextInputProcessorEx,
                                 public ITfKeyEventSink,
                                 public ITfActiveLanguageProfileNotifySink,
-                                public ITfDisplayAttributeProvider {
+                                public ITfDisplayAttributeProvider,
+                                public ITfCompositionSink {
 public:
     HeshunTextService();
     void ToggleInputMethodFromLangBar();
@@ -49,10 +50,14 @@ public:
     STDMETHODIMP EnumDisplayAttributeInfo(IEnumTfDisplayAttributeInfo** result) override;
     STDMETHODIMP GetDisplayAttributeInfo(REFGUID guid, ITfDisplayAttributeInfo** result) override;
 
+    // ITfCompositionSink
+    STDMETHODIMP OnCompositionTerminated(TfEditCookie ec_write, ITfComposition* composition) override;
+
     ITfComposition* composition() const { return composition_; }
     TfGuidAtom display_attribute_atom() const { return display_attribute_atom_; }
     void SetComposition(ITfComposition* composition);
     void ClearComposition();
+    void QueueCompositionUpdate(ITfContext* context);
 
 private:
     ~HeshunTextService();

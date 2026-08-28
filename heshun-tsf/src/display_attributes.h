@@ -39,8 +39,8 @@ public:
         *attribute = attribute_;
         return S_OK;
     }
-    STDMETHODIMP SetAttributeInfo(const TF_DISPLAYATTRIBUTE*) override { return E_ACCESSDENIED; }
-    STDMETHODIMP Reset() override { return S_OK; }
+    STDMETHODIMP SetAttributeInfo(const TF_DISPLAYATTRIBUTE*) override { return E_NOTIMPL; }
+    STDMETHODIMP Reset() override { return SetAttributeInfo(&attribute_); }
 
 private:
     LONG ref_count_ = 1;
@@ -50,7 +50,12 @@ private:
         value.crBk.type = TF_CT_NONE;
         value.lsStyle = TF_LS_DOT;
         value.fBoldLine = FALSE;
-        value.crLine.type = TF_CT_NONE;
+        // Weasel leaves the line color to the host with TF_CT_NONE.  This
+        // host accepts the attribute and asks the provider for its info, but
+        // renders no line for that unspecified color.  Keep Weasel's dotted
+        // style and input attribute while making the visible line explicit.
+        value.crLine.type = TF_CT_COLORREF;
+        value.crLine.cr = RGB(0, 120, 215);
         value.bAttr = TF_ATTR_INPUT;
         return value;
     }();
@@ -85,15 +90,18 @@ public:
         return S_OK;
     }
     STDMETHODIMP Next(ULONG count, ITfDisplayAttributeInfo** info, ULONG* fetched) override {
-        if (!info || !fetched) return E_INVALIDARG;
-        *fetched = 0;
-        if (count == 0 || index_ != 0) return index_ == 0 ? S_OK : S_FALSE;
-        auto* item = new (std::nothrow) HeshunDisplayAttributeInfo();
-        if (!item) return E_OUTOFMEMORY;
-        info[0] = item;
-        *fetched = 1;
-        index_ = 1;
-        return count == 1 ? S_OK : S_FALSE;
+        if (count == 0) return S_OK;
+        if (!info) return E_INVALIDARG;
+        if (fetched) *fetched = 0;
+        ULONG returned = 0;
+        while (returned < count && index_ == 0) {
+            auto* item = new (std::nothrow) HeshunDisplayAttributeInfo();
+            if (!item) return E_OUTOFMEMORY;
+            info[returned++] = item;
+            index_ = 1;
+        }
+        if (fetched) *fetched = returned;
+        return returned == count ? S_OK : S_FALSE;
     }
     STDMETHODIMP Reset() override { index_ = 0; return S_OK; }
     STDMETHODIMP Skip(ULONG count) override {

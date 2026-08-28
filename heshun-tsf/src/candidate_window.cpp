@@ -12,6 +12,9 @@ constexpr COLORREF kBorder = RGB(190, 190, 190);
 constexpr COLORREF kText = RGB(30, 30, 30);
 constexpr COLORREF kSelectionBackground = RGB(220, 235, 252);
 constexpr COLORREF kSelectionText = RGB(0, 50, 110);
+constexpr COLORREF kCaret = RGB(0, 120, 215);
+constexpr UINT_PTR kCaretTimer = 1;
+constexpr UINT kCaretBlinkMs = 530;
 constexpr int kHeaderHeight = 28;
 constexpr int kRowHeight = 25;
 constexpr int kPadding = 8;
@@ -108,6 +111,8 @@ void CandidateWindow::Show(std::wstring pending, std::vector<std::wstring> candi
     }
     InvalidateRect(window_, nullptr, TRUE);
     UpdateWindow(window_);
+    caret_visible_ = true;
+    SetTimer(window_, kCaretTimer, kCaretBlinkMs, nullptr);
 }
 
 void CandidateWindow::SetCandidateClickHandler(std::function<void(CandidateKey)> handler) {
@@ -127,7 +132,10 @@ void CandidateWindow::UseKeyboardSelection() {
 }
 
 void CandidateWindow::Hide() {
-    if (window_) ShowWindow(window_, SW_HIDE);
+    if (window_) {
+        KillTimer(window_, kCaretTimer);
+        ShowWindow(window_, SW_HIDE);
+    }
     pending_.clear();
     candidates_.clear();
     keys_.clear();
@@ -135,6 +143,7 @@ void CandidateWindow::Hide() {
     total_candidates_ = 0;
     selected_index_ = 0;
     keyboard_selection_ = false;
+    caret_visible_ = true;
 }
 
 size_t CandidateWindow::RowAtY(int y) const {
@@ -179,18 +188,31 @@ void CandidateWindow::Paint(HDC dc) {
     std::wstring title = L"编码: " + pending_ + L"  " + std::to_wstring(page_index_ + 1) +
                          L"/" + std::to_wstring(page_count);
     DrawTextW(dc, title.c_str(), -1, &line, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
-    const std::wstring caret_prefix = L"编码: " + pending_.substr(0, std::min<size_t>(cursor_, pending_.size()));
+
+    // The host owns the real composition caret.  This window is an additional
+    // IME-owned view, so mirror that same core cursor here as a plain vertical
+    // marker in the encoding text (not a second editing cursor).
+    const size_t cursor_chars = std::min<size_t>(cursor_, pending_.size());
+    const std::wstring cursor_prefix = L"编码: " + pending_.substr(0, cursor_chars);
     SIZE prefix_size{};
-    if (GetTextExtentPoint32W(dc, caret_prefix.c_str(), static_cast<int>(caret_prefix.size()), &prefix_size)) {
-        const int caret_x = line.left + prefix_size.cx + MulDiv(2, scale, 96);
-        HPEN caret_pen = CreatePen(PS_SOLID, std::max(1, MulDiv(1, scale, 96)), kSelectionText);
-        if (caret_pen) {
+    if (caret_visible_ && GetTextExtentPoint32W(dc, cursor_prefix.c_str(),
+                                                static_cast<int>(cursor_prefix.size()), &prefix_size)) {
+        const int caret_x = line.left + prefix_size.cx + MulDiv(1, scale, 96);
+        const int caret_w = std::max(1, MulDiv(1, scale, 96));
+        const int caret_top = line.top + MulDiv(5, scale, 96);
+        const int caret_bottom = line.bottom - MulDiv(5, scale, 96);
+        HBRUSH caret_brush = CreateSolidBrush(kCaret);
+        HPEN caret_pen = CreatePen(PS_SOLID, 1, kCaret);
+        if (caret_brush && caret_pen) {
+            RECT caret_rect{caret_x, caret_top, caret_x + caret_w, caret_bottom};
             HGDIOBJ old_pen = SelectObject(dc, caret_pen);
-            MoveToEx(dc, caret_x, line.top + MulDiv(4, scale, 96), nullptr);
-            LineTo(dc, caret_x, line.bottom - MulDiv(4, scale, 96));
+            HGDIOBJ old_brush = SelectObject(dc, caret_brush);
+            Rectangle(dc, caret_rect.left, caret_rect.top, caret_rect.right, caret_rect.bottom);
+            SelectObject(dc, old_brush);
             SelectObject(dc, old_pen);
-            DeleteObject(caret_pen);
         }
+        if (caret_brush) DeleteObject(caret_brush);
+        if (caret_pen) DeleteObject(caret_pen);
     }
 
     line.top += header;
@@ -234,6 +256,13 @@ LRESULT CALLBACK CandidateWindow::WindowProc(HWND window, UINT message, WPARAM w
     switch (message) {
     case WM_ERASEBKGND:
         return 1;
+    case WM_TIMER:
+        if (wparam == kCaretTimer) {
+            self->caret_visible_ = !self->caret_visible_;
+            InvalidateRect(window, nullptr, FALSE);
+            return 0;
+        }
+        break;
     case WM_PAINT: {
         PAINTSTRUCT ps{};
         HDC dc = BeginPaint(window, &ps);
