@@ -245,6 +245,7 @@ impl Engine {
             sentence_cands: Vec::new(),
             sentence_offset: 0,
             ascii_mode: false,
+            preceding_word: None,
         }
     }
 
@@ -264,12 +265,17 @@ pub struct Session<'a> {
     sentence_offset: usize,
     /// 是否处于西文模式（ascii_composer）
     pub ascii_mode: bool,
+    preceding_word: Option<String>,
 }
 
 impl<'a> Session<'a> {
     /// 当前缓冲编码（预编辑显示）。音码显示原始拼音串。
     pub fn pending(&self) -> &str {
         &self.buf
+    }
+
+    pub fn set_preceding_word(&mut self, word: Option<String>) {
+        self.preceding_word = word;
     }
 
     /// 外部包装类型访问内部状态（供 GUI 等使用）。
@@ -693,10 +699,11 @@ impl<'a> Session<'a> {
         }
 
         let user_dict = self.engine.user_dict.borrow();
-        let ranked = crate::word_graph::beam_search_with_user(
+        let ranked = crate::word_graph::beam_search_with_user_context(
             &input,
             dict,
             user_dict.as_ref(),
+            self.preceding_word.as_deref(),
             9,
             9,
             &BasicScorer::default(),

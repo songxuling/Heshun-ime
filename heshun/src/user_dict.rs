@@ -32,6 +32,23 @@ impl UserDict {
             .or_insert(0) += 1;
     }
 
+    pub fn forget(&mut self, code: &str, word: &str) -> bool {
+        let Some(words) = self.counts.get_mut(code) else {
+            return false;
+        };
+        let Some(count) = words.get_mut(word) else {
+            return false;
+        };
+        *count = count.saturating_sub(1);
+        if *count == 0 {
+            words.remove(word);
+        }
+        if words.is_empty() {
+            self.counts.remove(code);
+        }
+        true
+    }
+
     /// 开始一个可回滚的学习事务。
     pub fn begin_transaction(&mut self) {
         self.transactions.push(self.counts.clone());

@@ -55,8 +55,20 @@ pub struct CandidatePage {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Segment {
+    pub input: String,
+    pub text: Option<String>,
+    pub confirmed: bool,
+    pub cursor: usize,
+    pub page_index: usize,
+    pub selected: Option<CandidateKey>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CoreState {
     pub schema: SchemaId,
+    pub segments: Vec<Segment>,
+    pub current_segment: usize,
     /// 已确认的前置片段，保留在当前组合态中。
     pub confirmed_text: String,
     pub pending: String,
@@ -73,6 +85,8 @@ impl CoreState {
     pub fn new(schema: impl Into<SchemaId>) -> Self {
         Self {
             schema: schema.into(),
+            segments: Vec::new(),
+            current_segment: 0,
             confirmed_text: String::new(),
             pending: String::new(),
             cursor: 0,
@@ -110,6 +124,9 @@ pub enum InputEvent {
     ToggleFullShape,
     SetSchema(SchemaId),
     Reset,
+    ConfirmSegment,
+    ReopenPreviousSegment,
+    RevertLastEdit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -135,6 +152,8 @@ pub struct RuntimeStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextSnapshot {
+    pub segments: Vec<Segment>,
+    pub current_segment: usize,
     pub confirmed_text: String,
     pub pending: String,
     pub cursor: usize,
@@ -192,6 +211,7 @@ pub struct CoreRuntime {
     state: CoreState,
     page_size: usize,
     history: CommitHistory,
+    preceding_text: String,
 }
 
 impl CoreRuntime {
@@ -205,6 +225,7 @@ impl CoreRuntime {
             state: CoreState::new(schema),
             page_size: 9,
             history: CommitHistory::new(32),
+            preceding_text: String::new(),
         })
     }
 
@@ -225,6 +246,33 @@ impl CoreRuntime {
 
     pub fn confirmed_text(&self) -> &str {
         &self.state.confirmed_text
+    }
+
+    /// 设置宿主提供的前文，用于 Script 上下文评分。
+    pub fn set_preceding_text(&mut self, text: impl Into<String>) {
+        self.preceding_text = text.into();
+    }
+
+    pub fn preceding_text(&self) -> &str {
+        &self.preceding_text
+    }
+
+    pub fn revert_last_edit(&mut self) -> bool {
+        let Some(record) = self.history.pop() else {
+            return false;
+        };
+        if self.state.confirmed_text.ends_with(&record.text) {
+            let new_len = self.state.confirmed_text.len() - record.text.len();
+            self.state.confirmed_text.truncate(new_len);
+        }
+        if record.learned {
+            if let Some(engine) = self.store.get(&self.state.schema) {
+                if let Some(user_dict) = engine.user_dict.borrow_mut().as_mut() {
+                    return user_dict.forget(&record.code, &record.text);
+                }
+            }
+        }
+        true
     }
 
     pub fn save_user_dict(&self) -> Result<(), String> {
@@ -265,6 +313,13 @@ impl CoreRuntime {
                     self.state.cursor,
                 );
                 session.ascii_mode = self.state.ascii_mode;
+        session.set_preceding_word(
+            self.preceding_text
+                .chars()
+                .last()
+                .or_else(|| self.state.confirmed_text.chars().last())
+                .map(|c| c.to_string()),
+        );
                 if let FeedResult::Committed(text) = session.feed_at_cursor(ch) {
                     committed = Some(text);
                 }
@@ -322,6 +377,33 @@ impl CoreRuntime {
                 if committed.is_some() {
                     self.state.clear_composition();
                     composition = CompositionAction::End;
+                }
+            }
+            InputEvent::ConfirmSegment => {
+                if let Some(key) = self.selected_or_first() {
+                    if self.select_key(key, &mut error).is_some() {
+                        committed = None;
+                        composition = CompositionAction::Keep;
+                    }
+                }
+            }
+            InputEvent::ReopenPreviousSegment => {
+                if let Some(record) = self.history.pop() {
+                    if self.state.confirmed_text.ends_with(&record.text) {
+                        let new_len = self.state.confirmed_text.len() - record.text.len();
+                        self.state.confirmed_text.truncate(new_len);
+                    }
+                    self.state.segments.pop();
+                    self.state.current_segment = self.state.segments.len();
+                    self.state.pending = record.code;
+                    self.state.cursor = self.state.pending.chars().count();
+                    self.reset_candidate_view();
+                    composition = CompositionAction::Update;
+                }
+            }
+            InputEvent::RevertLastEdit => {
+                if self.revert_last_edit() {
+                    composition = CompositionAction::Update;
                 }
             }
             InputEvent::MoveSelection(delta) => {
@@ -403,8 +485,31 @@ impl CoreRuntime {
         }
         let word = all.iter().find(|item| item.key == key)?.word.clone();
         let code = self.state.pending.clone();
+        if let Some(engine) = self.store.get(&self.state.schema) {
+            if let Some(user_dict) = engine.user_dict.borrow_mut().as_mut() {
+                user_dict.begin_transaction();
+            }
+        }
         let result = self.with_session(|session| session.select_word(&word));
+        if let Some(engine) = self.store.get(&self.state.schema) {
+            if let Some(user_dict) = engine.user_dict.borrow_mut().as_mut() {
+                if result.is_some() {
+                    user_dict.commit_transaction();
+                } else {
+                    user_dict.rollback_transaction();
+                }
+            }
+        }
         if let Some(text) = result.as_ref() {
+            self.state.segments.push(Segment {
+                input: code.clone(),
+                text: Some(text.clone()),
+                confirmed: true,
+                cursor: 0,
+                page_index: 0,
+                selected: Some(key),
+            });
+            self.state.current_segment = self.state.segments.len();
             self.state.confirmed_text.push_str(text);
             self.history.push(CommitRecord {
                 text: text.clone(),
@@ -437,6 +542,13 @@ impl CoreRuntime {
             self.state.cursor,
         );
         session.ascii_mode = self.state.ascii_mode;
+        session.set_preceding_word(
+            self.preceding_text
+                .chars()
+                .last()
+                .or_else(|| self.state.confirmed_text.chars().last())
+                .map(|c| c.to_string()),
+        );
         let result = f(&mut session);
         self.save_session(&mut session);
         result
@@ -460,6 +572,8 @@ impl CoreRuntime {
             .selected
             .filter(|key| items.iter().any(|item| item.key == *key));
         ContextSnapshot {
+            segments: self.state.segments.clone(),
+            current_segment: self.state.current_segment,
             confirmed_text: self.state.confirmed_text.clone(),
             pending: self.state.pending.clone(),
             cursor: self.state.cursor,
@@ -492,6 +606,13 @@ impl CoreRuntime {
             self.state.cursor,
         );
         session.ascii_mode = self.state.ascii_mode;
+        session.set_preceding_word(
+            self.preceding_text
+                .chars()
+                .last()
+                .or_else(|| self.state.confirmed_text.chars().last())
+                .map(|c| c.to_string()),
+        );
         session
             .candidates(MAX_SNAPSHOT_CANDIDATES)
             .into_iter()
@@ -545,6 +666,8 @@ mod tests {
     #[test]
     fn owned_runtime_switches_schema_without_borrowed_state() {
         let mut runtime = CoreRuntime::new(store(), "table").unwrap();
+        runtime.set_preceding_text("前文");
+        assert_eq!(runtime.preceding_text(), "前文");
         runtime.dispatch(InputEvent::Text('a'));
         assert_eq!(runtime.snapshot().status.schema, "table");
         let result = runtime.dispatch(InputEvent::SetSchema("script".into()));
@@ -565,6 +688,19 @@ mod tests {
         assert_eq!(runtime.commit_history().len(), 1);
         assert_eq!(runtime.commit_history().last().unwrap().text, "我");
         assert_eq!(runtime.confirmed_text(), "我");
+    }
+
+    #[test]
+    fn confirm_segment_keeps_confirmed_text_and_revert_restores_pending() {
+        let mut runtime = CoreRuntime::new(store(), "script").unwrap();
+        runtime.dispatch(InputEvent::Text('w'));
+        runtime.dispatch(InputEvent::Text('o'));
+        let result = runtime.dispatch(InputEvent::ConfirmSegment);
+        assert_eq!(result.committed, None);
+        assert_eq!(runtime.confirmed_text(), "我");
+        assert!(runtime.state().pending.is_empty());
+        assert!(runtime.dispatch(InputEvent::ReopenPreviousSegment).snapshot.pending == "wo");
+        assert_eq!(runtime.confirmed_text(), "");
     }
 
     #[test]
