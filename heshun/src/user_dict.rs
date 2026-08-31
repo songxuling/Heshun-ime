@@ -15,11 +15,18 @@ pub struct UserDict {
     /// code(编码，形码=码，音码=拼音) → (字词 → 累计选择次数)
     counts: HashMap<String, HashMap<String, u32>>,
     transactions: Vec<HashMap<String, HashMap<String, u32>>>,
+    #[cfg(test)]
+    fail_next_commit: bool,
 }
 
 impl UserDict {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            counts: HashMap::new(),
+            transactions: Vec::new(),
+            #[cfg(test)]
+            fail_next_commit: false,
+        }
     }
 
     /// 记录一次选词。
@@ -32,6 +39,7 @@ impl UserDict {
             .or_insert(0) += 1;
     }
 
+    /// 删除一次用户学习计数；计数减到 0 时删除整条记录。
     pub fn forget(&mut self, code: &str, word: &str) -> bool {
         let Some(words) = self.counts.get_mut(code) else {
             return false;
@@ -56,12 +64,24 @@ impl UserDict {
 
     /// 提交最近一次学习事务。
     pub fn commit_transaction(&mut self) -> bool {
+        #[cfg(test)]
+        if self.fail_next_commit {
+            self.fail_next_commit = false;
+            return false;
+        }
         self.transactions.pop().is_some()
+    }
+
+    #[cfg(test)]
+    pub fn fail_next_commit_once(&mut self) {
+        self.fail_next_commit = true;
     }
 
     /// 回滚最近一次学习事务。
     pub fn rollback_transaction(&mut self) -> bool {
-        let Some(previous) = self.transactions.pop() else { return false; };
+        let Some(previous) = self.transactions.pop() else {
+            return false;
+        };
         self.counts = previous;
         true
     }
@@ -116,6 +136,8 @@ impl UserDict {
         Ok(UserDict {
             counts,
             transactions: Vec::new(),
+            #[cfg(test)]
+            fail_next_commit: false,
         })
     }
 
@@ -191,6 +213,39 @@ mod tests {
         let mut ud = UserDict::new();
         ud.begin_transaction();
         ud.learn("wo", "我");
+        assert_eq!(ud.count("wo", "我"), 1);
+        assert!(ud.rollback_transaction());
+        assert_eq!(ud.count("wo", "我"), 0);
+    }
+
+    #[test]
+    fn nested_transactions_rollback_to_outer_state() {
+        let mut ud = UserDict::new();
+        ud.begin_transaction();
+        ud.learn("wo", "我");
+        ud.begin_transaction();
+        ud.learn("wo", "我");
+        assert_eq!(ud.count("wo", "我"), 2);
+        assert!(ud.rollback_transaction());
+        assert_eq!(ud.count("wo", "我"), 1);
+        assert!(ud.commit_transaction());
+        assert_eq!(ud.count("wo", "我"), 1);
+    }
+
+    #[test]
+    fn rollback_without_transaction_returns_false() {
+        let mut ud = UserDict::new();
+        assert!(!ud.rollback_transaction());
+        assert!(!ud.commit_transaction());
+    }
+
+    #[test]
+    fn commit_failure_keeps_transaction_for_rollback() {
+        let mut ud = UserDict::new();
+        ud.begin_transaction();
+        ud.learn("wo", "我");
+        ud.fail_next_commit_once();
+        assert!(!ud.commit_transaction());
         assert_eq!(ud.count("wo", "我"), 1);
         assert!(ud.rollback_transaction());
         assert_eq!(ud.count("wo", "我"), 0);

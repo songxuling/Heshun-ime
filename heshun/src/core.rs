@@ -257,6 +257,62 @@ impl CoreRuntime {
         &self.preceding_text
     }
 
+    pub fn current_segment_index(&self) -> usize {
+        self.state.current_segment
+    }
+
+    pub fn current_segment(&self) -> Option<&Segment> {
+        self.state.segments.get(self.state.current_segment)
+    }
+
+    pub fn focus_segment(&mut self, index: usize) -> bool {
+        if index >= self.state.segments.len() {
+            return false;
+        }
+        self.state.current_segment = index;
+        if let Some(segment) = self.state.segments.get(index).cloned() {
+            self.state.pending = segment.input;
+            self.state.cursor = segment.cursor.min(self.state.pending.chars().count());
+            self.state.page_index = segment.page_index;
+            self.state.selected = segment.selected;
+        }
+        true
+    }
+
+    pub fn move_segment(&mut self, delta: i32) -> bool {
+        if self.state.segments.is_empty() {
+            return false;
+        }
+        let next = (self.state.current_segment as i32 + delta)
+            .clamp(0, self.state.segments.len().saturating_sub(1) as i32) as usize;
+        self.focus_segment(next)
+    }
+
+    pub fn delete_segment(&mut self, index: usize) -> bool {
+        if index >= self.state.segments.len() {
+            return false;
+        }
+        let segment = self.state.segments.remove(index);
+        if let Some(text) = segment.text {
+            if self.state.confirmed_text.ends_with(&text) {
+                let new_len = self.state.confirmed_text.len() - text.len();
+                self.state.confirmed_text.truncate(new_len);
+            }
+        }
+        if self.state.current_segment >= self.state.segments.len() {
+            self.state.current_segment = self.state.segments.len().saturating_sub(1);
+        }
+        if let Some(current) = self.state.segments.get(self.state.current_segment).cloned() {
+            self.state.pending = current.input;
+            self.state.cursor = current.cursor;
+            self.state.page_index = current.page_index;
+            self.state.selected = current.selected;
+        } else {
+            self.state.clear_composition();
+        }
+        true
+    }
+
     pub fn revert_last_edit(&mut self) -> bool {
         let Some(record) = self.history.pop() else {
             return false;
@@ -332,6 +388,20 @@ impl CoreRuntime {
             }
             InputEvent::Backspace => {
                 if self.state.pending.is_empty() {
+                    if self.revert_last_edit() {
+                        self.reset_candidate_view();
+                        composition = if self.state.pending.is_empty() {
+                            CompositionAction::End
+                        } else {
+                            CompositionAction::Update
+                        };
+                        return self.result(
+                            disposition,
+                            committed,
+                            composition,
+                            error,
+                        );
+                    }
                     return self.result(
                         EventDisposition::PassedThrough,
                         None,
@@ -499,22 +569,30 @@ impl CoreRuntime {
         if let Some(engine) = self.store.get(&self.state.schema) {
             if let Some(user_dict) = engine.user_dict.borrow_mut().as_mut() {
                 if result.is_some() {
-                    user_dict.commit_transaction();
+                    if !user_dict.commit_transaction() {
+                        user_dict.rollback_transaction();
+                    }
                 } else {
                     user_dict.rollback_transaction();
                 }
             }
         }
         if let Some(text) = result.as_ref() {
-            self.state.segments.push(Segment {
+            let segment = Segment {
                 input: code.clone(),
                 text: Some(text.clone()),
                 confirmed: true,
                 cursor: 0,
                 page_index: 0,
                 selected: Some(key),
-            });
-            self.state.current_segment = self.state.segments.len();
+            };
+            if let Some(last) = self.state.segments.last_mut().filter(|segment| !segment.confirmed) {
+                *last = segment;
+                self.state.current_segment = self.state.segments.len() - 1;
+            } else {
+                self.state.segments.push(segment);
+                self.state.current_segment = self.state.segments.len() - 1;
+            }
             self.state.confirmed_text.push_str(text);
             self.history.push(CommitRecord {
                 text: text.clone(),
@@ -702,7 +780,8 @@ mod tests {
                     ("wo".into(), "我".into(), 100),
                     ("zhong".into(), "中".into(), 100),
                 ]),
-            }),
+            })
+            .with_user_dict(crate::user_dict::UserDict::new()),
         );
         Arc::new(store)
     }
@@ -893,6 +972,73 @@ mod tests {
         runtime.dispatch(InputEvent::MoveCursor(-1));
         runtime.dispatch(InputEvent::Backspace);
         assert_eq!(runtime.snapshot().segments.last().unwrap().input, "wx");
+    }
+
+    #[test]
+    fn current_segment_can_move_and_delete() {
+        let mut runtime = CoreRuntime::new(store(), "script").unwrap();
+        for ch in "wo".chars() {
+            runtime.dispatch(InputEvent::Text(ch));
+        }
+        runtime.dispatch(InputEvent::ConfirmSegment);
+        eprintln!("after wo: {:?}", runtime.snapshot().segments.iter().map(|s| (&s.input, s.confirmed)).collect::<Vec<_>>());
+        for ch in "zhong".chars() {
+            runtime.dispatch(InputEvent::Text(ch));
+        }
+        runtime.dispatch(InputEvent::ConfirmSegment);
+        eprintln!("after zhong: {:?}", runtime.snapshot().segments.iter().map(|s| (&s.input, s.confirmed)).collect::<Vec<_>>());
+        assert_eq!(runtime.current_segment_index(), 1);
+        assert!(runtime.move_segment(-1));
+        assert_eq!(runtime.current_segment_index(), 0);
+        assert_eq!(runtime.current_segment().unwrap().input, "wo");
+        assert!(runtime.delete_segment(0));
+        assert_eq!(runtime.current_segment_index(), 0);
+        assert_eq!(runtime.current_segment().unwrap().input, "zhong");
+    }
+
+    #[test]
+    fn current_segment_focuses_and_keeps_cursor() {
+        let mut runtime = CoreRuntime::new(store(), "script").unwrap();
+        for ch in "wox".chars() {
+            runtime.dispatch(InputEvent::Text(ch));
+        }
+        runtime.dispatch(InputEvent::MoveCursor(-1));
+        assert!(runtime.focus_segment(0));
+        assert_eq!(runtime.snapshot().cursor, 2);
+    }
+
+    #[test]
+    fn current_segment_rejects_out_of_range_focus() {
+        let mut runtime = CoreRuntime::new(store(), "script").unwrap();
+        assert!(!runtime.focus_segment(1));
+    }
+
+    #[test]
+    fn current_segment_move_handles_empty_state() {
+        let mut runtime = CoreRuntime::new(store(), "script").unwrap();
+        assert!(!runtime.move_segment(1));
+    }
+
+    #[test]
+    fn commit_failure_rolls_back_user_dict_learning() {
+        let store = store();
+        {
+            let engine = store.get("script").unwrap();
+            engine
+                .user_dict
+                .borrow_mut()
+                .as_mut()
+                .unwrap()
+                .fail_next_commit_once();
+        }
+        let mut runtime = CoreRuntime::new(store.clone(), "script").unwrap();
+        for ch in "wo".chars() {
+            runtime.dispatch(InputEvent::Text(ch));
+        }
+        let first = runtime.snapshot().candidates.items[0].clone();
+        assert_eq!(runtime.dispatch(InputEvent::Select(first.key)).committed, Some(first.word));
+        let engine = store.get("script").unwrap();
+        assert_eq!(engine.user_dict.borrow().as_ref().unwrap().count("wo", "我"), 0);
     }
 
     #[test]
