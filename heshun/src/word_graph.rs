@@ -71,6 +71,30 @@ pub fn beam_search(
     let input = crate::pinyin::normalize_pinyin(input);
     if input.is_empty() || max_sentences == 0 { return Vec::new(); }
     let edges = build_word_graph(&input, dict, beam_width.max(1));
+    beam_from_edges(&input, edges, max_sentences, beam_width, scorer)
+}
+
+pub fn beam_search_with_user(
+    input: &str,
+    dict: &PinyinDict,
+    user_dict: Option<&UserDict>,
+    max_sentences: usize,
+    beam_width: usize,
+    scorer: &impl CandidateScorer,
+) -> Vec<RankedSentence> {
+    let input = crate::pinyin::normalize_pinyin(input);
+    if input.is_empty() || max_sentences == 0 { return Vec::new(); }
+    let edges = build_word_graph_with_user(&input, dict, user_dict, beam_width.max(1));
+    beam_from_edges(&input, edges, max_sentences, beam_width, scorer)
+}
+
+fn beam_from_edges(
+    input: &str,
+    edges: Vec<WordEdge>,
+    max_sentences: usize,
+    beam_width: usize,
+    scorer: &impl CandidateScorer,
+) -> Vec<RankedSentence> {
     let mut states: Vec<Vec<RankedSentence>> = vec![Vec::new(); input.len() + 1];
     states[0].push(RankedSentence { words: Vec::new(), score: 0.0 });
     for end in 1..=input.len() {

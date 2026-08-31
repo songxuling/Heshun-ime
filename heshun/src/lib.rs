@@ -15,6 +15,7 @@
 
 pub mod algebra;
 pub mod composer;
+pub mod context_score;
 pub mod core;
 pub mod dict;
 pub mod engine;
@@ -39,4 +40,5 @@ pub use dict::Dict;
 pub use engine::{Candidate, Engine, FeedResult, SchemaKind, Session};
 pub use pinyin::PinyinDict;
 pub use schema::SchemaConfig;
+pub use segmentation::{EdgeProperties, SpellingType, SyllableEdge, SyllableGraph};
 pub use zrm::ZrmMap;

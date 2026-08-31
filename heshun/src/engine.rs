@@ -15,6 +15,7 @@ use crate::pinyin::PinyinDict;
 use crate::processor::Processor;
 use crate::punctuator::Punctuator;
 use crate::reverse_lookup::ReverseLookup;
+use crate::scorer::BasicScorer;
 use crate::user_dict::UserDict;
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -640,7 +641,22 @@ impl<'a> Session<'a> {
             return FeedResult::Rejected;
         }
 
-        self.sentence_cands = composer::compose(&input, dict, 9);
+        let user_dict = self.engine.user_dict.borrow();
+        let ranked = crate::word_graph::beam_search_with_user(
+            &input,
+            dict,
+            user_dict.as_ref(),
+            9,
+            9,
+            &BasicScorer::default(),
+        );
+        self.sentence_cands = ranked
+            .into_iter()
+            .map(|sentence| SentenceCandidate {
+                words: sentence.words,
+                score: sentence.score.max(0.0).round() as u32,
+            })
+            .collect();
         self.sentence_offset = 0;
 
         if exact.is_empty() && prefix.is_empty() && self.sentence_cands.is_empty() {
