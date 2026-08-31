@@ -24,6 +24,8 @@ pub enum CandidateSource {
     ScriptSentence = 3,
     ScriptPrefix = 4,
     Reverse = 5,
+    ScriptAbbreviation = 7,
+    ScriptCorrection = 8,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

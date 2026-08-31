@@ -33,7 +33,8 @@ pub fn spelling_penalty(kind: SpellingType) -> f64 {
         SpellingType::Normal => 0.0,
         SpellingType::Abbreviation => -2.3,
         SpellingType::Completion => -3.0,
-        SpellingType::Correction => -4.6,
+        // Rime's kCorrectionPenalty = log(0.01).
+        SpellingType::Correction => -4.605_170_185_988_091,
     }
 }
 
@@ -51,5 +52,6 @@ mod tests {
     fn spelling_penalties_keep_normal_first() {
         assert_eq!(spelling_penalty(SpellingType::Normal), 0.0);
         assert!(spelling_penalty(SpellingType::Completion) < spelling_penalty(SpellingType::Abbreviation));
+        assert!((spelling_penalty(SpellingType::Correction) - 0.01_f64.ln()).abs() < 1e-12);
     }
 }

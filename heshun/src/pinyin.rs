@@ -20,6 +20,7 @@
 //! 条目按 code（连续拼音）升序排列，供二分查找。
 
 use crate::zrm::ZrmMap;
+use std::collections::HashSet;
 
 const MAGIC: u32 = 0x3159505A;
 const VERSION: u32 = 1;
@@ -111,6 +112,13 @@ impl PinyinDict {
     /// 用于「输入未完整音节」时的候选提示。
     /// 注意：这里返回的是词条的编码前缀匹配，不是音节级前缀。
     pub fn prefix(&self, input: &str) -> Vec<PinyinCandidate> {
+        self.prefix_with_codes(input)
+            .into_iter()
+            .map(|(_, candidate)| candidate)
+            .collect()
+    }
+
+    pub fn prefix_with_codes(&self, input: &str) -> Vec<(String, PinyinCandidate)> {
         let input = normalize_pinyin(input);
         let lo = self.codes.partition_point(|c| c.as_str() < input.as_str());
         // `starts_with(input)` is not a monotonic predicate, so it cannot be
@@ -120,7 +128,15 @@ impl PinyinDict {
         upper.push('{');
         let hi = self.codes.partition_point(|c| c.as_str() < upper.as_str());
         (lo..hi)
-            .map(|i| PinyinCandidate { word: self.word(i).to_string(), weight: self.weights[i] })
+            .map(|i| {
+                (
+                    self.codes[i].clone(),
+                    PinyinCandidate {
+                        word: self.word(i).to_string(),
+                        weight: self.weights[i],
+                    },
+                )
+            })
             .collect()
     }
 
@@ -152,6 +168,69 @@ impl PinyinDict {
     pub fn has_code(&self, code: &str) -> bool {
         let code = normalize_pinyin(code);
         self.codes.binary_search(&code).is_ok()
+    }
+
+    /// 查找编码可按音节首字母缩写匹配的词条，例如 zg -> zhongguo。
+    pub fn abbreviation(&self, abbr: &str, limit: usize) -> Vec<PinyinCandidate> {
+        self.abbreviation_with_codes(abbr, limit)
+            .into_iter()
+            .map(|(_, candidate)| candidate)
+            .collect()
+    }
+
+    pub fn abbreviation_with_codes(&self, abbr: &str, limit: usize) -> Vec<(String, PinyinCandidate)> {
+        let abbr = normalize_pinyin(abbr);
+        if abbr.is_empty() { return Vec::new(); }
+        let syllables: Vec<String> = self.codes.iter().cloned().collect();
+        let mut matching_codes = HashSet::new();
+        for code in &self.codes {
+            if abbreviation_matches(code, abbr.as_bytes(), &syllables, 0) {
+                matching_codes.insert(code.as_str());
+            }
+        }
+        let mut result = Vec::new();
+        for (i, code) in self.codes.iter().enumerate() {
+            if matching_codes.contains(code.as_str()) {
+                result.push((code.clone(), PinyinCandidate { word: self.word(i).to_string(), weight: self.weights[i] }));
+                if limit != 0 && result.len() >= limit { break; }
+            }
+        }
+        result
+    }
+
+    /// 在限定编辑距离内查找纠错候选，返回完整编码与候选。
+    pub fn correction_with_codes(
+        &self,
+        input: &str,
+        max_distance: usize,
+        limit: usize,
+    ) -> Vec<(String, PinyinCandidate)> {
+        let input = normalize_pinyin(input);
+        if input.is_empty() || limit == 0 {
+            return Vec::new();
+        }
+        let mut result = Vec::new();
+        for (i, code) in self.codes.iter().enumerate() {
+            if code == &input {
+                continue;
+            }
+            let distance = edit_distance_bounded(input.as_bytes(), code.as_bytes(), max_distance);
+            if distance <= max_distance {
+                result.push((
+                    distance,
+                    code.clone(),
+                    PinyinCandidate {
+                        word: self.word(i).to_string(),
+                        weight: self.weights[i],
+                    },
+                ));
+            }
+        }
+        // Align with Rime's Corrector: smallest edit distance first, then
+        // dictionary frequency, with code as a deterministic final tie-break.
+        result.sort_by(|a, b| a.0.cmp(&b.0).then(b.2.weight.cmp(&a.2.weight)).then(a.1.cmp(&b.1)));
+        result.truncate(limit);
+        result.into_iter().map(|(_, code, candidate)| (code, candidate)).collect()
     }
 
     /// 序列化为二进制格式。
@@ -262,6 +341,36 @@ impl PinyinDict {
     }
 }
 
+fn abbreviation_matches(code: &str, abbr: &[u8], syllables: &[String], index: usize) -> bool {
+    if code.is_empty() { return index == abbr.len(); }
+    if index >= abbr.len() { return false; }
+    syllables.iter().any(|syllable| {
+        code.starts_with(syllable)
+            && syllable.as_bytes().first().copied() == Some(abbr[index])
+            && abbreviation_matches(&code[syllable.len()..], abbr, syllables, index + 1)
+    })
+}
+
+fn edit_distance_bounded(left: &[u8], right: &[u8], bound: usize) -> usize {
+    if left.len().abs_diff(right.len()) > bound {
+        return bound.saturating_add(1);
+    }
+    let mut previous: Vec<usize> = (0..=right.len()).collect();
+    for (i, &a) in left.iter().enumerate() {
+        let mut current = vec![i + 1; right.len() + 1];
+        for (j, &b) in right.iter().enumerate() {
+            current[j + 1] = (previous[j + 1] + 1)
+                .min(current[j] + 1)
+                .min(previous[j] + usize::from(a != b));
+        }
+        if current.iter().copied().min().unwrap_or(bound + 1) > bound {
+            return bound + 1;
+        }
+        previous = current;
+    }
+    previous[right.len()]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -320,7 +429,16 @@ mod tests {
         let d = sample();
         let p = d.prefix("zhong");
         assert!(!p.is_empty());
-        assert!(p.iter().any(|c| c.word == "中"));
+        assert!(p.iter().any(|c| c.word == "中国"));
+    }
+
+    #[test]
+    fn correction_lookup_returns_one_edit_code() {
+        let dict = PinyinDict::from_entries(vec![("zhong".into(), "中".into(), 100)]);
+        let got = dict.correction_with_codes("zhon", 1, 4);
+        assert!(got.iter().any(|(code, candidate)| {
+            code == "zhong" && candidate.word == "中"
+        }));
     }
 
     #[test]
@@ -343,6 +461,16 @@ mod tests {
         let m = d.matches_prefix("zhongguo");
         assert!(m.iter().any(|(len, c)| *len == 5 && c.word == "中")); // "zhong"=5
         assert!(m.iter().any(|(len, c)| *len == 8 && c.word == "中国")); // "zhongguo"=8
+    }
+
+    #[test]
+    fn abbreviation_lookup_returns_multi_syllable_words() {
+        let d = PinyinDict::from_entries(vec![
+            ("zhong".into(), "中".into(), 100),
+            ("guo".into(), "国".into(), 90),
+            ("zhong guo".into(), "中国".into(), 200),
+        ]);
+        assert!(d.abbreviation("zg", 9).iter().any(|c| c.word == "中国"));
     }
 
     #[test]

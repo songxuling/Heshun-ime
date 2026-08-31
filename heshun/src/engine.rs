@@ -71,6 +71,10 @@ pub struct Engine {
     user_dict_path: Option<PathBuf>,
     /// 标点引擎（半角→全角映射），None 表示不转换标点。
     pub punctuator: Option<Punctuator>,
+    script_abbreviation: bool,
+    script_strict_spelling: bool,
+    script_correction: bool,
+    max_corrections: usize,
 }
 
 impl Engine {
@@ -84,6 +88,10 @@ impl Engine {
             user_dict: RefCell::new(None),
             user_dict_path: None,
             punctuator: None,
+            script_abbreviation: false,
+            script_strict_spelling: false,
+            script_correction: false,
+            max_corrections: 4,
         }
     }
 
@@ -104,6 +112,22 @@ impl Engine {
 
     pub fn with_punctuator(mut self, p: Punctuator) -> Self {
         self.punctuator = Some(p);
+        self
+    }
+
+    pub fn with_script_abbreviation(mut self, enabled: bool) -> Self {
+        self.script_abbreviation = enabled;
+        self
+    }
+
+    pub fn with_script_strict_spelling(mut self, enabled: bool) -> Self {
+        self.script_strict_spelling = enabled;
+        self
+    }
+
+    pub fn with_script_correction(mut self, enabled: bool, max_corrections: usize) -> Self {
+        self.script_correction = enabled;
+        self.max_corrections = max_corrections.max(1);
         self
     }
 
@@ -172,6 +196,10 @@ impl Engine {
         };
 
         let mut engine = Engine::new(kind);
+        engine.script_abbreviation = sc.speller.enable_abbreviation.unwrap_or(false);
+        engine.script_strict_spelling = sc.speller.strict_spelling.unwrap_or(false);
+        engine.script_correction = sc.speller.enable_correction.unwrap_or(false);
+        engine.max_corrections = sc.speller.max_corrections.unwrap_or(4).max(1);
         engine.table_dict = table_dict;
 
         // 反查字典
@@ -424,16 +452,49 @@ impl<'a> Session<'a> {
                         });
                     }
                 }
-                for cand in dict.prefix(&input) {
-                    if out.len() >= limit {
-                        break;
+                let exact_is_reliable = !dict.exact(&input).is_empty();
+                if !self.engine.script_strict_spelling || !exact_is_reliable {
+                    for cand in dict.prefix(&input) {
+                        if out.len() >= limit {
+                            break;
+                        }
+                        if seen.insert(cand.word.clone()) {
+                            out.push(Candidate {
+                                word: cand.word,
+                                code: input.clone(),
+                                source: CandidateSource::ScriptPrefix,
+                            });
+                        }
                     }
-                    if seen.insert(cand.word.clone()) {
-                        out.push(Candidate {
-                            word: cand.word,
-                            code: input.clone(),
-                            source: CandidateSource::ScriptPrefix,
-                        });
+                }
+                if self.engine.script_abbreviation && !self.engine.script_strict_spelling {
+                    for cand in dict.abbreviation(&self.buf, limit) {
+                        if out.len() >= limit {
+                            break;
+                        }
+                        if seen.insert(cand.word.clone()) {
+                            out.push(Candidate {
+                                word: cand.word,
+                                code: input.clone(),
+                                source: CandidateSource::ScriptAbbreviation,
+                            });
+                        }
+                    }
+                }
+                if self.engine.script_correction && !self.engine.script_strict_spelling {
+                    for (code, cand) in
+                        dict.correction_with_codes(&self.buf, 1, self.engine.max_corrections)
+                    {
+                        if out.len() >= limit {
+                            break;
+                        }
+                        if seen.insert(cand.word.clone()) {
+                            out.push(Candidate {
+                                word: cand.word,
+                                code,
+                                source: CandidateSource::ScriptCorrection,
+                            });
+                        }
                     }
                 }
                 out
@@ -924,6 +985,37 @@ user_dict:
         let w = s.select_first();
         assert_eq!(w, Some("我".into()));
         assert!(s.pending().is_empty());
+    }
+
+    #[test]
+    fn strict_spelling_hides_prefix_completion_after_exact_match() {
+        let e = Engine::new(SchemaKind::Script {
+            dict: PinyinDict::from_entries(vec![
+                ("a".into(), "啊".into(), 100),
+                ("ab".into(), "阿布".into(), 90),
+            ]),
+        })
+        .with_script_strict_spelling(true);
+        let mut s = e.session();
+        s.feed('a');
+        let candidates = s.candidates(0);
+        assert!(candidates.iter().all(|c| c.word == "啊"));
+    }
+
+    #[test]
+    fn correction_candidate_is_available_for_one_typo() {
+        let e = Engine::new(SchemaKind::Script {
+            dict: PinyinDict::from_entries(vec![("zhong".into(), "中".into(), 100)]),
+        })
+        .with_script_correction(true, 4);
+        let mut s = e.session();
+        for ch in "zong".chars() {
+            s.feed(ch);
+        }
+        let candidates = s.candidates(0);
+        assert!(candidates.iter().any(|candidate| {
+            candidate.word == "中" && candidate.source == CandidateSource::ScriptCorrection
+        }));
     }
 
     #[test]
