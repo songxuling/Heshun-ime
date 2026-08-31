@@ -90,9 +90,37 @@ pub fn beam_search_with_user(
     beam_from_edges(&input, edges, max_sentences, beam_width, scorer)
 }
 
+pub fn beam_search_with_user_context(
+    input: &str,
+    dict: &PinyinDict,
+    user_dict: Option<&UserDict>,
+    preceding_word: Option<&str>,
+    max_sentences: usize,
+    beam_width: usize,
+    scorer: &impl CandidateScorer,
+) -> Vec<RankedSentence> {
+    let input = crate::pinyin::normalize_pinyin(input);
+    if input.is_empty() || max_sentences == 0 {
+        return Vec::new();
+    }
+    let edges = build_word_graph_with_user(&input, dict, user_dict, beam_width.max(1));
+    beam_from_edges_with_context(&input, edges, preceding_word, max_sentences, beam_width, scorer)
+}
+
 fn beam_from_edges(
     input: &str,
     edges: Vec<WordEdge>,
+    max_sentences: usize,
+    beam_width: usize,
+    scorer: &impl CandidateScorer,
+) -> Vec<RankedSentence> {
+    beam_from_edges_with_context(input, edges, None, max_sentences, beam_width, scorer)
+}
+
+fn beam_from_edges_with_context(
+    input: &str,
+    edges: Vec<WordEdge>,
+    preceding_word: Option<&str>,
     max_sentences: usize,
     beam_width: usize,
     scorer: &impl CandidateScorer,
@@ -104,7 +132,11 @@ fn beam_from_edges(
         for edge in incoming {
             let previous = states[edge.start].clone();
             for sentence in previous {
-                let previous_word = sentence.words.last().map(String::as_str);
+                let previous_word = sentence
+                    .words
+                    .last()
+                    .map(String::as_str)
+                    .or(preceding_word);
                 let score = sentence.score + scorer.score_word(previous_word, &edge.word, edge.weight, end == input.len());
                 let mut words = sentence.words;
                 words.push(edge.word.clone());
@@ -174,5 +206,17 @@ mod tests {
         ]);
         let result = default_beam_search("zhong", &dict, 8);
         assert_eq!(result.iter().filter(|sentence| sentence.words == vec!["中"]).count(), 1);
+    }
+
+    #[test]
+    fn context_word_is_used_for_first_sentence_score() {
+        let dict = PinyinDict::from_entries(vec![
+            ("a".into(), "甲".into(), 100),
+            ("a".into(), "乙".into(), 90),
+        ]);
+        let mut scorer = crate::context_score::BigramScorer::new(BasicScorer::default());
+        scorer.insert("前", "乙", 10.0);
+        let result = beam_search_with_user_context("a", &dict, None, Some("前"), 2, 4, &scorer);
+        assert_eq!(result[0].words, vec!["乙"]);
     }
 }

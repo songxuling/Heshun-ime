@@ -57,6 +57,8 @@ pub struct CandidatePage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CoreState {
     pub schema: SchemaId,
+    /// 已确认的前置片段，保留在当前组合态中。
+    pub confirmed_text: String,
     pub pending: String,
     /// 插入光标在 pending 中的 Unicode 字符索引。
     pub cursor: usize,
@@ -71,6 +73,7 @@ impl CoreState {
     pub fn new(schema: impl Into<SchemaId>) -> Self {
         Self {
             schema: schema.into(),
+            confirmed_text: String::new(),
             pending: String::new(),
             cursor: 0,
             sentence_candidates: Vec::new(),
@@ -132,6 +135,7 @@ pub struct RuntimeStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextSnapshot {
+    pub confirmed_text: String,
     pub pending: String,
     pub cursor: usize,
     pub candidates: CandidatePage,
@@ -219,6 +223,10 @@ impl CoreRuntime {
         &self.history
     }
 
+    pub fn confirmed_text(&self) -> &str {
+        &self.state.confirmed_text
+    }
+
     pub fn save_user_dict(&self) -> Result<(), String> {
         let Some(engine) = self.store.get(&self.state.schema) else {
             return Err(format!("unknown schema: {}", self.state.schema));
@@ -289,6 +297,7 @@ impl CoreRuntime {
             InputEvent::Delete => disposition = EventDisposition::PassedThrough,
             InputEvent::Escape | InputEvent::Reset => {
                 self.state.clear_composition();
+                self.state.confirmed_text.clear();
                 composition = CompositionAction::End;
             }
             InputEvent::Space | InputEvent::Enter => {
@@ -396,6 +405,7 @@ impl CoreRuntime {
         let code = self.state.pending.clone();
         let result = self.with_session(|session| session.select_word(&word));
         if let Some(text) = result.as_ref() {
+            self.state.confirmed_text.push_str(text);
             self.history.push(CommitRecord {
                 text: text.clone(),
                 code,
@@ -450,6 +460,7 @@ impl CoreRuntime {
             .selected
             .filter(|key| items.iter().any(|item| item.key == *key));
         ContextSnapshot {
+            confirmed_text: self.state.confirmed_text.clone(),
             pending: self.state.pending.clone(),
             cursor: self.state.cursor,
             candidates: CandidatePage {
@@ -553,6 +564,7 @@ mod tests {
         assert_eq!(result.committed, Some(first.word));
         assert_eq!(runtime.commit_history().len(), 1);
         assert_eq!(runtime.commit_history().last().unwrap().text, "我");
+        assert_eq!(runtime.confirmed_text(), "我");
     }
 
     #[test]

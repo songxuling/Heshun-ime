@@ -77,7 +77,7 @@ impl UserDict {
     pub fn composition_words(&self, code: &str) -> Vec<(String, u32)> {
         self.words_for(code)
             .into_iter()
-            .map(|(word, count)| (word, count.max(1)))
+            .map(|(word, count)| (word, (count.saturating_mul(10)).min(u32::MAX - 1) + 1))
             .collect()
     }
 
