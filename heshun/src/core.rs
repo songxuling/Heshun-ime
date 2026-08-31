@@ -5,6 +5,7 @@
 
 use crate::composer::SentenceCandidate;
 use crate::engine::{Engine, FeedResult};
+use crate::history::{CommitHistory, CommitRecord};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -186,6 +187,7 @@ pub struct CoreRuntime {
     store: Arc<EngineStore>,
     state: CoreState,
     page_size: usize,
+    history: CommitHistory,
 }
 
 impl CoreRuntime {
@@ -198,6 +200,7 @@ impl CoreRuntime {
             store,
             state: CoreState::new(schema),
             page_size: 9,
+            history: CommitHistory::new(32),
         })
     }
 
@@ -210,6 +213,10 @@ impl CoreRuntime {
 
     pub fn schema_id(&self) -> &str {
         &self.state.schema
+    }
+
+    pub fn commit_history(&self) -> &CommitHistory {
+        &self.history
     }
 
     pub fn save_user_dict(&self) -> Result<(), String> {
@@ -386,7 +393,16 @@ impl CoreRuntime {
             return None;
         }
         let word = all.iter().find(|item| item.key == key)?.word.clone();
-        self.with_session(|session| session.select_word(&word))
+        let code = self.state.pending.clone();
+        let result = self.with_session(|session| session.select_word(&word));
+        if let Some(text) = result.as_ref() {
+            self.history.push(CommitRecord {
+                text: text.clone(),
+                code,
+                learned: true,
+            });
+        }
+        result
     }
 
     fn move_page(&mut self, delta: i32) {
@@ -535,6 +551,8 @@ mod tests {
         let first = page.items[0].clone();
         let result = runtime.dispatch(InputEvent::Select(first.key));
         assert_eq!(result.committed, Some(first.word));
+        assert_eq!(runtime.commit_history().len(), 1);
+        assert_eq!(runtime.commit_history().last().unwrap().text, "我");
     }
 
     #[test]

@@ -16,9 +16,9 @@ use crate::processor::Processor;
 use crate::punctuator::Punctuator;
 use crate::reverse_lookup::ReverseLookup;
 use crate::scorer::BasicScorer;
+use crate::translation::{FifoTranslation, MergedTranslation};
 use crate::user_dict::UserDict;
 use std::cell::RefCell;
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 // ── 公共类型 ──────────────────────────────────────────
@@ -423,81 +423,71 @@ impl<'a> Session<'a> {
                     .collect()
             }
             SchemaKind::Script { dict, .. } => {
-                let mut out = Vec::new();
-                let mut seen = HashSet::new();
                 let input = self.normalized_input();
                 let limit = if limit == 0 { usize::MAX } else { limit };
-                for cand in dict.exact(&input) {
-                    if out.len() >= limit {
-                        break;
-                    }
-                    if seen.insert(cand.word.clone()) {
-                        out.push(Candidate {
+                let exact = dict
+                    .exact(&input)
+                    .into_iter()
+                    .map(|cand| Candidate {
+                        word: cand.word,
+                        code: input.clone(),
+                        source: CandidateSource::ScriptExact,
+                    })
+                    .collect();
+                let sentences = self
+                    .sentence_cands
+                    .iter()
+                    .map(|sc| Candidate {
+                        word: sc.words.join(""),
+                        code: input.clone(),
+                        source: CandidateSource::ScriptSentence,
+                    })
+                    .collect();
+                let exact_is_reliable = !dict.exact(&input).is_empty();
+                let prefix = if !self.engine.script_strict_spelling || !exact_is_reliable {
+                    dict.prefix(&input)
+                        .into_iter()
+                        .map(|cand| Candidate {
                             word: cand.word,
                             code: input.clone(),
-                            source: CandidateSource::ScriptExact,
-                        });
-                    }
-                }
-                for sc in &self.sentence_cands {
-                    if out.len() >= limit {
-                        break;
-                    }
-                    let word = sc.words.join("");
-                    if seen.insert(word.clone()) {
-                        out.push(Candidate {
-                            word,
+                            source: CandidateSource::ScriptPrefix,
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let abbreviation = if self.engine.script_abbreviation && !self.engine.script_strict_spelling {
+                    dict.abbreviation(&self.buf, limit)
+                        .into_iter()
+                        .map(|cand| Candidate {
+                            word: cand.word,
                             code: input.clone(),
-                            source: CandidateSource::ScriptSentence,
-                        });
-                    }
-                }
-                let exact_is_reliable = !dict.exact(&input).is_empty();
-                if !self.engine.script_strict_spelling || !exact_is_reliable {
-                    for cand in dict.prefix(&input) {
-                        if out.len() >= limit {
-                            break;
-                        }
-                        if seen.insert(cand.word.clone()) {
-                            out.push(Candidate {
-                                word: cand.word,
-                                code: input.clone(),
-                                source: CandidateSource::ScriptPrefix,
-                            });
-                        }
-                    }
-                }
-                if self.engine.script_abbreviation && !self.engine.script_strict_spelling {
-                    for cand in dict.abbreviation(&self.buf, limit) {
-                        if out.len() >= limit {
-                            break;
-                        }
-                        if seen.insert(cand.word.clone()) {
-                            out.push(Candidate {
-                                word: cand.word,
-                                code: input.clone(),
-                                source: CandidateSource::ScriptAbbreviation,
-                            });
-                        }
-                    }
-                }
-                if self.engine.script_correction && !self.engine.script_strict_spelling {
-                    for (code, cand) in
-                        dict.correction_with_codes(&self.buf, 1, self.engine.max_corrections)
-                    {
-                        if out.len() >= limit {
-                            break;
-                        }
-                        if seen.insert(cand.word.clone()) {
-                            out.push(Candidate {
-                                word: cand.word,
-                                code,
-                                source: CandidateSource::ScriptCorrection,
-                            });
-                        }
-                    }
-                }
-                out
+                            source: CandidateSource::ScriptAbbreviation,
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let correction = if self.engine.script_correction && !self.engine.script_strict_spelling {
+                    dict.correction_with_codes(&self.buf, 1, self.engine.max_corrections)
+                        .into_iter()
+                        .map(|(code, cand)| Candidate {
+                            word: cand.word,
+                            code,
+                            source: CandidateSource::ScriptCorrection,
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                MergedTranslation::new(vec![
+                    FifoTranslation::new(exact),
+                    FifoTranslation::new(sentences),
+                    FifoTranslation::new(prefix),
+                    FifoTranslation::new(abbreviation),
+                    FifoTranslation::new(correction),
+                ])
+                .collect(limit)
             }
         };
 

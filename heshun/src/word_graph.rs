@@ -19,6 +19,8 @@ pub struct RankedSentence {
     pub score: f64,
 }
 
+const SENTENCE_CUTOFF: f64 = 8.0;
+
 pub fn build_word_graph(input: &str, dict: &PinyinDict, per_code_limit: usize) -> Vec<WordEdge> {
     let graph = SyllableGraph::build(input, dict);
     let mut edges = Vec::new();
@@ -109,11 +111,28 @@ fn beam_from_edges(
                 states[end].push(RankedSentence { words, score });
             }
         }
-        states[end].sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.words.len().cmp(&b.words.len())));
+        states[end].sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.words.len().cmp(&b.words.len()))
+                .then_with(|| a.words.cmp(&b.words))
+        });
         states[end].truncate(beam_width.max(max_sentences));
     }
     let mut result = states.pop().unwrap_or_default();
+    result.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.words.len().cmp(&b.words.len()))
+            .then_with(|| a.words.cmp(&b.words))
+    });
+    if let Some(best) = result.first().map(|sentence| sentence.score) {
+        result.retain(|sentence| sentence.score >= best - SENTENCE_CUTOFF);
+    }
+    let mut seen = std::collections::HashSet::new();
+    result.retain(|sentence| seen.insert(sentence.words.clone()));
     result.truncate(max_sentences);
     result
 }
@@ -145,5 +164,15 @@ mod tests {
         user.learn("zhong", "钟");
         let edges = build_word_graph_with_user("zhong", &dict, Some(&user), 8);
         assert!(edges.iter().any(|edge| edge.word == "钟"));
+    }
+
+    #[test]
+    fn beam_search_deduplicates_same_sentence_text() {
+        let dict = PinyinDict::from_entries(vec![
+            ("zhong".into(), "中".into(), 100),
+            ("zhong".into(), "中".into(), 90),
+        ]);
+        let result = default_beam_search("zhong", &dict, 8);
+        assert_eq!(result.iter().filter(|sentence| sentence.words == vec!["中"]).count(), 1);
     }
 }
