@@ -83,6 +83,16 @@ pub struct SpellerSection {
     pub alphabet: Option<String>,
     #[serde(default)]
     pub algebra: Option<Vec<String>>,
+    #[serde(default)]
+    pub strict_spelling: Option<bool>,
+    #[serde(default)]
+    pub enable_completion: Option<bool>,
+    #[serde(default)]
+    pub enable_abbreviation: Option<bool>,
+    #[serde(default)]
+    pub enable_correction: Option<bool>,
+    #[serde(default)]
+    pub max_corrections: Option<usize>,
 }
 
 /// 反查段（reverse_lookup）。
@@ -203,5 +213,25 @@ engine:
         let c = SchemaConfig::parse(yaml).unwrap();
         assert_eq!(c.dictionary.file, "");
         assert_eq!(c.speller.max_code_length, None);
+    }
+
+    #[test]
+    fn parse_spelling_quality_options() {
+        let yaml = r#"
+schema:
+  schema_id: foo
+  name: Foo
+engine:
+  type: script
+speller:
+  strict_spelling: true
+  enable_completion: true
+  enable_abbreviation: true
+  enable_correction: true
+  max_corrections: 4
+"#;
+        let c = SchemaConfig::parse(yaml).unwrap();
+        assert_eq!(c.speller.strict_spelling, Some(true));
+        assert_eq!(c.speller.max_corrections, Some(4));
     }
 }

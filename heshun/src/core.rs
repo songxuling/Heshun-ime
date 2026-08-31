@@ -19,6 +19,7 @@ pub type SchemaId = String;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum CandidateSource {
     Table = 1,
+    TableCompletion = 6,
     ScriptExact = 2,
     ScriptSentence = 3,
     ScriptPrefix = 4,

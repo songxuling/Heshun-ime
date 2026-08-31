@@ -19,12 +19,17 @@ pub mod core;
 pub mod dict;
 pub mod engine;
 pub mod ffi;
+pub mod history;
 pub mod pinyin;
 pub mod processor;
 pub mod punctuator;
 pub mod reverse_lookup;
 pub mod schema;
+pub mod segmentation;
+pub mod scorer;
+pub mod translation;
 pub mod user_dict;
+pub mod word_graph;
 pub mod zrm;
 
 pub use algebra::Algebra;

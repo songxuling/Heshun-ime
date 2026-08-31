@@ -4,6 +4,7 @@
 //! 按词频总分排序返回最佳 N 个句子候选。
 
 use crate::pinyin::{normalize_pinyin, PinyinCandidate, PinyinDict};
+use crate::segmentation::SyllableGraph;
 use serde::{Deserialize, Serialize};
 
 const MAX_COMPOSE_INPUT_LEN: usize = 64;
@@ -22,7 +23,8 @@ pub struct SentenceCandidate {
 /// 与 dp[j] 组合形成新候选。保留 top `max_results` 个按 score 降序的候选。
 pub fn compose(input: &str, dict: &PinyinDict, max_results: usize) -> Vec<SentenceCandidate> {
     let input = normalize_pinyin(input);
-    let n = input.len();
+    let graph = SyllableGraph::build(&input, dict);
+    let n = graph.input_length;
     if n == 0 {
         return Vec::new();
     }
@@ -42,19 +44,13 @@ pub fn compose(input: &str, dict: &PinyinDict, max_results: usize) -> Vec<Senten
     let max_results = if max_results == 0 { 64 } else { max_results.max(1) };
 
     for i in 1..=n {
-        // 先克隆 dp[j] 的数据（j < i），避免同时借用
         let prev_data: Vec<Vec<SentenceCandidate>> = dp[..i].to_vec();
-
-        for j in 0..i {
-            let segment = &input[j..i];
-            // The DP output is capped at max_results. Pinyin entries sharing
-            // one code are already ordered by descending frequency, so
-            // materialize only the candidates that can affect the top-N result.
-            let cands: Vec<PinyinCandidate> = dict.exact_limited(segment, max_results);
-            if cands.is_empty() || prev_data[j].is_empty() {
+        for edge in graph.edges.iter().filter(|edge| edge.end == i) {
+            let cands: Vec<PinyinCandidate> = dict.exact_limited(&edge.code, max_results);
+            if cands.is_empty() || prev_data[edge.start].is_empty() {
                 continue;
             }
-            for prev in &prev_data[j] {
+            for prev in &prev_data[edge.start] {
                 for cand in &cands {
                     let mut words = prev.words.clone();
                     words.push(cand.word.clone());

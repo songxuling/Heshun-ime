@@ -1,0 +1,125 @@
+//! 词图与 beam search 组句，参考 librime 的 Poet::WordGraph。
+
+use crate::pinyin::PinyinDict;
+use crate::scorer::{BasicScorer, CandidateScorer};
+use crate::segmentation::SyllableGraph;
+use crate::user_dict::UserDict;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WordEdge {
+    pub start: usize,
+    pub end: usize,
+    pub word: String,
+    pub weight: u32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RankedSentence {
+    pub words: Vec<String>,
+    pub score: f64,
+}
+
+pub fn build_word_graph(input: &str, dict: &PinyinDict, per_code_limit: usize) -> Vec<WordEdge> {
+    let graph = SyllableGraph::build(input, dict);
+    let mut edges = Vec::new();
+    for edge in graph.edges {
+        for candidate in dict.exact_limited(&edge.code, per_code_limit) {
+            edges.push(WordEdge {
+                start: edge.start,
+                end: edge.end,
+                word: candidate.word,
+                weight: candidate.weight,
+            });
+        }
+    }
+    edges
+}
+
+/// Build a graph where learned user phrases are additional edges.
+pub fn build_word_graph_with_user(
+    input: &str,
+    dict: &PinyinDict,
+    user_dict: Option<&UserDict>,
+    per_code_limit: usize,
+) -> Vec<WordEdge> {
+    let mut edges = build_word_graph(input, dict, per_code_limit);
+    let Some(user_dict) = user_dict else { return edges; };
+    let graph = SyllableGraph::build(input, dict);
+    for edge in graph.edges {
+        for (word, count) in user_dict
+            .composition_words(&edge.code)
+            .into_iter()
+            .take(per_code_limit.max(1))
+        {
+            if !edges.iter().any(|candidate| {
+                candidate.start == edge.start && candidate.end == edge.end && candidate.word == word
+            }) {
+                edges.push(WordEdge { start: edge.start, end: edge.end, word, weight: count });
+            }
+        }
+    }
+    edges
+}
+
+pub fn beam_search(
+    input: &str,
+    dict: &PinyinDict,
+    max_sentences: usize,
+    beam_width: usize,
+    scorer: &impl CandidateScorer,
+) -> Vec<RankedSentence> {
+    let input = crate::pinyin::normalize_pinyin(input);
+    if input.is_empty() || max_sentences == 0 { return Vec::new(); }
+    let edges = build_word_graph(&input, dict, beam_width.max(1));
+    let mut states: Vec<Vec<RankedSentence>> = vec![Vec::new(); input.len() + 1];
+    states[0].push(RankedSentence { words: Vec::new(), score: 0.0 });
+    for end in 1..=input.len() {
+        let incoming: Vec<_> = edges.iter().filter(|edge| edge.end == end).cloned().collect();
+        for edge in incoming {
+            let previous = states[edge.start].clone();
+            for sentence in previous {
+                let previous_word = sentence.words.last().map(String::as_str);
+                let score = sentence.score + scorer.score_word(previous_word, &edge.word, edge.weight, end == input.len());
+                let mut words = sentence.words;
+                words.push(edge.word.clone());
+                states[end].push(RankedSentence { words, score });
+            }
+        }
+        states[end].sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.words.len().cmp(&b.words.len())));
+        states[end].truncate(beam_width.max(max_sentences));
+    }
+    let mut result = states.pop().unwrap_or_default();
+    result.truncate(max_sentences);
+    result
+}
+
+pub fn default_beam_search(input: &str, dict: &PinyinDict, max_sentences: usize) -> Vec<RankedSentence> {
+    beam_search(input, dict, max_sentences, max_sentences.saturating_mul(3).max(7), &BasicScorer::default())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn beam_search_returns_complete_paths() {
+        let dict = PinyinDict::from_entries(vec![
+            ("zhong".into(), "中".into(), 100),
+            ("guo".into(), "国".into(), 90),
+            ("zhong guo".into(), "中国".into(), 500),
+        ]);
+        let result = default_beam_search("zhongguo", &dict, 3);
+        assert!(result.iter().any(|s| s.words == vec!["中国"]));
+        assert!(result.iter().any(|s| s.words == vec!["中", "国"]));
+    }
+
+    #[test]
+    fn learned_phrase_is_added_as_a_graph_edge() {
+        let dict = PinyinDict::from_entries(vec![("zhong".into(), "中".into(), 100)]);
+        let mut user = UserDict::new();
+        user.learn("zhong", "钟");
+        let edges = build_word_graph_with_user("zhong", &dict, Some(&user), 8);
+        assert!(edges.iter().any(|edge| edge.word == "钟"));
+    }
+}

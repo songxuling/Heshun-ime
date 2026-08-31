@@ -10,17 +10,16 @@ use std::collections::HashMap;
 
 use crate::engine::Candidate;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct UserDict {
     /// code(编码，形码=码，音码=拼音) → (字词 → 累计选择次数)
     counts: HashMap<String, HashMap<String, u32>>,
+    transactions: Vec<HashMap<String, HashMap<String, u32>>>,
 }
 
 impl UserDict {
     pub fn new() -> Self {
-        UserDict {
-            counts: HashMap::new(),
-        }
+        Self::default()
     }
 
     /// 记录一次选词。
@@ -31,6 +30,23 @@ impl UserDict {
             .or_default()
             .entry(word.to_string())
             .or_insert(0) += 1;
+    }
+
+    /// 开始一个可回滚的学习事务。
+    pub fn begin_transaction(&mut self) {
+        self.transactions.push(self.counts.clone());
+    }
+
+    /// 提交最近一次学习事务。
+    pub fn commit_transaction(&mut self) -> bool {
+        self.transactions.pop().is_some()
+    }
+
+    /// 回滚最近一次学习事务。
+    pub fn rollback_transaction(&mut self) -> bool {
+        let Some(previous) = self.transactions.pop() else { return false; };
+        self.counts = previous;
+        true
     }
 
     /// 查询某编码下某字词的选中次数。
@@ -53,8 +69,16 @@ impl UserDict {
             return Vec::new();
         };
         let mut v: Vec<(String, u32)> = m.iter().map(|(w, c)| (w.clone(), *c)).collect();
-        v.sort_by(|a, b| b.1.cmp(&a.1));
+        v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
         v
+    }
+
+    /// 返回可参与组句的用户词条；计数转换为非零基础权重。
+    pub fn composition_words(&self, code: &str) -> Vec<(String, u32)> {
+        self.words_for(code)
+            .into_iter()
+            .map(|(word, count)| (word, count.max(1)))
+            .collect()
     }
 
     /// 持久化到 JSON 文件。
@@ -72,7 +96,10 @@ impl UserDict {
         let text = std::fs::read_to_string(path)?;
         let counts: HashMap<String, HashMap<String, u32>> = serde_json::from_str(&text)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-        Ok(UserDict { counts })
+        Ok(UserDict {
+            counts,
+            transactions: Vec::new(),
+        })
     }
 
     pub fn is_empty(&self) -> bool {
@@ -140,6 +167,16 @@ mod tests {
         ];
         ud.reorder_candidates("zhong", &mut candidates);
         assert_eq!(candidates[0].word, "钟");
+    }
+
+    #[test]
+    fn transaction_can_be_rolled_back() {
+        let mut ud = UserDict::new();
+        ud.begin_transaction();
+        ud.learn("wo", "我");
+        assert_eq!(ud.count("wo", "我"), 1);
+        assert!(ud.rollback_transaction());
+        assert_eq!(ud.count("wo", "我"), 0);
     }
 
     #[test]

@@ -385,7 +385,11 @@ impl<'a> Session<'a> {
                     .map(|c| Candidate {
                         word: c.word.to_string(),
                         code: c.code.clone(),
-                        source: CandidateSource::Table,
+                        source: if c.code == self.buf {
+                            CandidateSource::Table
+                        } else {
+                            CandidateSource::TableCompletion
+                        },
                     })
                     .collect()
             }
@@ -490,7 +494,9 @@ impl<'a> Session<'a> {
         }
 
         let c = ch.to_ascii_lowercase();
-        if !c.is_ascii_alphabetic() {
+        let script_delimiter = matches!(&self.engine.schema, SchemaKind::Script { .. })
+            && (ch == '\'' || ch == ' ');
+        if !c.is_ascii_alphabetic() && !script_delimiter {
             return FeedResult::Rejected;
         }
         match &self.engine.schema {
@@ -506,7 +512,9 @@ impl<'a> Session<'a> {
                 *auto_select,
                 auto_select_pattern.as_deref(),
             ),
-            SchemaKind::Script { dict } => self.feed_script(dict, c),
+            SchemaKind::Script { dict } => {
+                self.feed_script(dict, if script_delimiter { ch } else { c })
+            }
         }
     }
 
@@ -610,7 +618,9 @@ impl<'a> Session<'a> {
         let input = if let Some(map) = zrm {
             map.to_pinyin(&self.buf)
         } else {
-            self.normalized_input()
+            // Keep delimiters for the syllable graph; dictionary lookups
+            // normalize them internally.
+            self.buf.clone()
         };
 
         // 双拼下，末尾奇数键会被忽略（尚未构成完整音节），
@@ -649,59 +659,16 @@ impl<'a> Session<'a> {
         if self.buf.is_empty() {
             return None;
         }
-        let idx = idx.wrapping_sub(1);
-        let code_for_learn;
-        // 候选顺序与 candidates() 保持一致
-        let result = if self.in_reverse_mode() {
-            let Some(rl) = &self.engine.reverse_lookup else {
-                return None;
-            };
-            let query = self.reverse_query().unwrap_or("");
-            code_for_learn = query.to_string();
-            let input = crate::pinyin::normalize_pinyin(query);
-            let exact: Vec<_> = rl.dict().exact(&input);
-            if idx < exact.len() {
-                Some(exact[idx].word.clone())
-            } else {
-                let sent_offset = exact.len();
-                if idx < sent_offset + self.sentence_cands.len() {
-                    let sci = idx - sent_offset;
-                    Some(self.sentence_cands[sci].words.join(""))
-                } else {
-                    None
-                }
-            }
+        let candidate = self.candidates(usize::MAX).into_iter().nth(idx.checked_sub(1)?)?;
+        let code_for_learn = if self.in_reverse_mode() {
+            self.reverse_query().unwrap_or("").to_owned()
         } else {
             match &self.engine.schema {
-                SchemaKind::Table { dict, .. } => {
-                    code_for_learn = self.buf.clone();
-                    let cands = dict.prefix(&self.buf, 0);
-                    cands.get(idx).map(|c| c.word.to_string())
-                }
-                SchemaKind::Script { dict, .. } => {
-                    let input = self.normalized_input();
-                    code_for_learn = input.clone();
-                    let exact: Vec<_> = dict.exact(&input);
-                    if idx < exact.len() {
-                        Some(exact[idx].word.clone())
-                    } else {
-                        let sent_offset = exact.len();
-                        if idx < sent_offset + self.sentence_cands.len() {
-                            let sci = idx - sent_offset;
-                            Some(self.sentence_cands[sci].words.join(""))
-                        } else {
-                            let prefix_offset = sent_offset + self.sentence_cands.len();
-                            let prefix: Vec<_> = dict.prefix(&input);
-                            if idx < prefix_offset + prefix.len() {
-                                Some(prefix[idx - prefix_offset].word.clone())
-                            } else {
-                                None
-                            }
-                        }
-                    }
-                }
+                SchemaKind::Table { .. } => self.buf.clone(),
+                SchemaKind::Script { .. } => self.normalized_input(),
             }
         };
+        let result = Some(candidate.word);
 
         if let Some(ref w) = result {
             // 用户词典学习
@@ -712,6 +679,7 @@ impl<'a> Session<'a> {
 
         self.buf.clear();
         self.sentence_cands.clear();
+        self.cursor = 0;
         result
     }
 
@@ -734,6 +702,7 @@ impl<'a> Session<'a> {
         }
         self.buf.clear();
         self.sentence_cands.clear();
+        self.cursor = 0;
         Some(candidate.word)
     }
 
@@ -774,14 +743,17 @@ impl<'a> Session<'a> {
     pub fn clear(&mut self) {
         self.buf.clear();
         self.sentence_cands.clear();
+        self.cursor = 0;
     }
 
     /// 外壳切焦点/模式时调用。
     pub fn flush(&mut self) -> Option<String> {
         self.sentence_cands.clear();
         if self.buf.is_empty() {
+            self.cursor = 0;
             None
         } else {
+            self.cursor = 0;
             Some(std::mem::take(&mut self.buf))
         }
     }
@@ -936,6 +908,19 @@ user_dict:
         let w = s.select_first();
         assert_eq!(w, Some("我".into()));
         assert!(s.pending().is_empty());
+    }
+
+    #[test]
+    fn numeric_selection_uses_deduplicated_display_order() {
+        let e = script_engine();
+        let mut s = e.session();
+        for c in "zhongguo".chars() {
+            s.feed(c);
+        }
+        let displayed = s.candidates(usize::MAX);
+        assert!(displayed.len() >= 2);
+        let second = displayed[1].word.clone();
+        assert_eq!(s.select(2), Some(second));
     }
 
     #[test]
