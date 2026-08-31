@@ -416,19 +416,24 @@ impl CoreRuntime {
                     let next =
                         (current as i32 + delta).rem_euclid(page.items.len() as i32) as usize;
                     self.state.selected = Some(page.items[next].key);
+                    self.sync_current_segment_state();
                 }
             }
             InputEvent::MoveCursor(delta) => {
                 self.state.cursor = (self.state.cursor as i32 + delta)
                     .clamp(0, self.state.pending.chars().count() as i32)
                     as usize;
+                self.sync_current_segment_state();
                 composition = if self.state.pending.is_empty() {
                     CompositionAction::End
                 } else {
                     CompositionAction::Keep
                 };
             }
-            InputEvent::Page(delta) => self.move_page(delta),
+            InputEvent::Page(delta) => {
+                self.move_page(delta);
+                self.sync_current_segment_state();
+            }
             InputEvent::ToggleAscii => self.set_ascii(!self.state.ascii_mode),
             InputEvent::SetAscii(value) => self.set_ascii(value),
             InputEvent::ToggleFullShape => self.state.full_shape = !self.state.full_shape,
@@ -536,6 +541,7 @@ impl CoreRuntime {
             .cloned()
             .expect("validated schema");
         let mut session = engine.session();
+        self.load_current_segment_state();
         session.restore_state_at(
             self.state.pending.clone(),
             self.state.sentence_candidates.clone(),
@@ -559,6 +565,44 @@ impl CoreRuntime {
         self.state.pending = pending;
         self.state.sentence_candidates = sentence;
         self.state.cursor = cursor;
+        self.sync_current_segment_state();
+    }
+
+    fn load_current_segment_state(&mut self) {
+        if let Some(segment) = self
+            .state
+            .segments
+            .get(self.state.current_segment)
+            .cloned()
+            .filter(|segment| !segment.confirmed)
+        {
+            self.state.pending = segment.input;
+            self.state.cursor = segment.cursor;
+            self.state.page_index = segment.page_index;
+            self.state.selected = segment.selected;
+        }
+    }
+
+    fn sync_current_segment_state(&mut self) {
+        if self.state.pending.is_empty() {
+            return;
+        }
+        let segment = Segment {
+            input: self.state.pending.clone(),
+            text: None,
+            confirmed: false,
+            cursor: self.state.cursor,
+            page_index: self.state.page_index,
+            selected: self.state.selected,
+        };
+        if self.state.current_segment < self.state.segments.len()
+            && !self.state.segments[self.state.current_segment].confirmed
+        {
+            self.state.segments[self.state.current_segment] = segment;
+        } else {
+            self.state.segments.push(segment);
+            self.state.current_segment = self.state.segments.len() - 1;
+        }
     }
 
     fn build_snapshot(&self) -> ContextSnapshot {
@@ -838,6 +882,17 @@ mod tests {
         runtime.dispatch(InputEvent::Backspace);
         assert_eq!(runtime.snapshot().pending, "wx");
         assert_eq!(runtime.snapshot().cursor, 1);
+    }
+
+    #[test]
+    fn cursor_backspace_at_middle_updates_segment_state() {
+        let mut runtime = CoreRuntime::new(store(), "script").unwrap();
+        for ch in "wox".chars() {
+            runtime.dispatch(InputEvent::Text(ch));
+        }
+        runtime.dispatch(InputEvent::MoveCursor(-1));
+        runtime.dispatch(InputEvent::Backspace);
+        assert_eq!(runtime.snapshot().segments.last().unwrap().input, "wx");
     }
 
     #[test]
