@@ -28,7 +28,14 @@ set_target_properties(heshun_tsf PROPERTIES
 )
 
 # Rust's import library is intentionally linked by path, not checked in.
-set(HESHUN_RELEASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../target/x86_64-pc-windows-msvc/release")
+# Build one TSF DLL per host architecture: 32-bit hosts (WOW64) cannot load
+# the x64 component, while 64-bit hosts cannot load the Win32 component.
+if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+  set(HESHUN_RUST_TARGET "x86_64-pc-windows-msvc")
+else()
+  set(HESHUN_RUST_TARGET "i686-pc-windows-msvc")
+endif()
+set(HESHUN_RELEASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../target/${HESHUN_RUST_TARGET}/release")
 if(EXISTS "${HESHUN_RELEASE_DIR}/heshun.lib")
   target_link_libraries(heshun_tsf PRIVATE "${HESHUN_RELEASE_DIR}/heshun.lib")
   add_custom_command(TARGET heshun_tsf POST_BUILD
@@ -40,7 +47,7 @@ if(EXISTS "${HESHUN_RELEASE_DIR}/heshun.lib")
     COMMENT "Copying heshun runtime and schemas beside the TSF DLL"
   )
 else()
-  message(FATAL_ERROR "Missing heshun.lib. Build it first: cargo build -p heshun --release --target x86_64-pc-windows-msvc")
+  message(FATAL_ERROR "Missing heshun.lib. Build it first: cargo build -p heshun --release --target ${HESHUN_RUST_TARGET}")
 endif()
 
 add_executable(heshun_tsf_profile src/profile_tool.cpp)

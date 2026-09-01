@@ -37,6 +37,14 @@ if not exist "%TOOL%" set "TOOL=%~dp0..\..\build-tsf\bin\heshun_tsf_profile.exe"
 echo [heshun-tsf] Running elevated removal.
 echo [heshun-tsf] DLL: %DLL%
 if exist "%TOOL%" "%TOOL%" unregister
+if errorlevel 1 (
+  echo TSF profile removal failed.
+  exit /b 1
+)
 if exist "%DLL%" regsvr32 /u /s "%DLL%"
+if errorlevel 1 (
+  echo COM unregistration failed.
+  exit /b 1
+)
 
 echo heshun TSF input method and legacy profiles unregistered.

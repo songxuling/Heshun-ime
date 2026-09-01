@@ -272,6 +272,8 @@ LRESULT CALLBACK CandidateWindow::WindowProc(HWND window, UINT message, WPARAM w
     }
     case WM_NCHITTEST:
         return HTCLIENT;
+    case WM_MOUSEACTIVATE:
+        return MA_NOACTIVATE;
     case WM_MOUSEMOVE: {
         TRACKMOUSEEVENT track{sizeof(track), TME_LEAVE, window, 0};
         TrackMouseEvent(&track);

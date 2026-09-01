@@ -557,9 +557,36 @@ std::string Hr(HRESULT hr) {
     return out.str();
 }
 
+bool LoadPinyinMode() {
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Heshun", 0, KEY_READ, &key) != ERROR_SUCCESS) return false;
+    wchar_t value[32]{};
+    DWORD type = REG_SZ;
+    DWORD bytes = sizeof(value);
+    const LONG result = RegQueryValueExW(key, L"InputMode", nullptr, &type,
+                                         reinterpret_cast<BYTE*>(value), &bytes);
+    RegCloseKey(key);
+    return result == ERROR_SUCCESS && type == REG_SZ && _wcsicmp(value, L"pinyin") == 0;
+}
+
+void SavePinyinMode(bool pinyin_mode) {
+    HKEY key = nullptr;
+    DWORD disposition = 0;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\Heshun", 0, nullptr, 0,
+                        KEY_WRITE, nullptr, &key, &disposition) != ERROR_SUCCESS) return;
+    const wchar_t* value = pinyin_mode ? L"pinyin" : L"zhengma";
+    RegSetValueExW(key, L"InputMode", 0, REG_SZ,
+                   reinterpret_cast<const BYTE*>(value),
+                   static_cast<DWORD>((wcslen(value) + 1) * sizeof(wchar_t)));
+    RegCloseKey(key);
+}
+
 } // namespace
 
-HeshunTextService::HeshunTextService() { InterlockedIncrement(&g_object_count); }
+HeshunTextService::HeshunTextService() {
+    pinyin_mode_ = LoadPinyinMode();
+    InterlockedIncrement(&g_object_count);
+}
 HeshunTextService::~HeshunTextService() {
     Deactivate();
     InterlockedDecrement(&g_object_count);
@@ -798,6 +825,19 @@ bool HeshunTextService::LoadEngine() {
     return true;
 }
 
+void HeshunTextService::RefreshPersistentInputMode() {
+    const bool persisted_mode = LoadPinyinMode();
+    if (persisted_mode == pinyin_mode_) return;
+    if (runtime_) FreeEngine();
+    pinyin_mode_ = persisted_mode;
+    if (LoadEngine()) {
+        Trace(pinyin_mode_ ? "Input method: synchronized Pinyin" :
+                             "Input method: synchronized Zhengma");
+    } else {
+        Trace("Input method sync failed: engine reload failed");
+    }
+}
+
 bool HeshunTextService::DispatchRuntime(unsigned int opcode, long long value, CandidateKey key) {
     if (!runtime_) return false;
     hs_runtime_event_t event{};
@@ -998,7 +1038,7 @@ void HeshunTextService::UpdateCandidateWindow() {
 }
 
 void HeshunTextService::ChangeCandidatePage(int direction) {
-    DispatchRuntime(8, direction);
+    if (DispatchRuntime(8, direction)) UpdateCandidateWindow();
 }
 
 void HeshunTextService::TraceSelectionKey(WPARAM key) const {
@@ -1035,6 +1075,7 @@ void HeshunTextService::ToggleInputMethod(ITfContext* context) {
     CancelComposition(context);
     FreeEngine();
     pinyin_mode_ = !pinyin_mode_;
+    SavePinyinMode(pinyin_mode_);
     if (!LoadEngine()) {
         Trace("Input method switch failed: engine reload failed");
         return;
@@ -1044,7 +1085,7 @@ void HeshunTextService::ToggleInputMethod(ITfContext* context) {
 }
 
 void HeshunTextService::ToggleInputMethodFromLangBar() {
-    ToggleInputMethod(active_context_);
+    ToggleAsciiMode(active_context_);
 }
 
 bool HeshunTextService::IsHandledKey(WPARAM key) const {
@@ -1114,7 +1155,10 @@ bool HeshunTextService::FeedKey(WPARAM key, std::string& committed) {
 }
 
 STDMETHODIMP HeshunTextService::OnSetFocus(BOOL foreground) {
-    if (foreground) return S_OK;
+    if (foreground) {
+        RefreshPersistentInputMode();
+        return S_OK;
+    }
     ClearActiveContext("FocusLost");
     return S_OK;
 }
@@ -1139,6 +1183,7 @@ STDMETHODIMP HeshunTextService::OnSetFocus(ITfDocumentMgr* focused_document_mana
     if (focused_document_manager) focused_document_manager->GetTop(&focused_context);
     if (focused_context != active_context_) ClearActiveContext("DocumentFocusChanged");
     if (focused_context) focused_context->Release();
+    RefreshPersistentInputMode();
     return S_OK;
 }
 
@@ -1150,15 +1195,26 @@ STDMETHODIMP HeshunTextService::OnPopContext(ITfContext* context) {
     if (context == active_context_) ClearActiveContext("ContextPopped");
     return S_OK;
 }
-STDMETHODIMP HeshunTextService::OnTestKeyDown(ITfContext*, WPARAM wparam, LPARAM lparam, BOOL* eaten) {
+STDMETHODIMP HeshunTextService::OnTestKeyDown(ITfContext* context, WPARAM wparam, LPARAM lparam, BOOL* eaten) {
     if (!eaten) return E_INVALIDARG;
-    *eaten = (IsHandledKey(wparam) || (HasPending() && !ShiftOemSymbol(wparam, lparam).empty())) ? TRUE : FALSE;
-    if (*eaten) Trace("OnTestKeyDown: handled");
-    return S_OK;
+    test_key_up_pending_ = false;
+    if (test_key_down_pending_) {
+        *eaten = TRUE;
+        return S_OK;
+    }
+    HRESULT hr = OnKeyDown(context, wparam, lparam, eaten);
+    if (SUCCEEDED(hr) && *eaten) test_key_down_pending_ = true;
+    return hr;
 }
 
 STDMETHODIMP HeshunTextService::OnKeyDown(ITfContext* context, WPARAM wparam, LPARAM lparam, BOOL* eaten) {
     if (!eaten) return E_INVALIDARG;
+    if (test_key_down_pending_) {
+        test_key_down_pending_ = false;
+        *eaten = TRUE;
+        return S_OK;
+    }
+    RefreshPersistentInputMode();
     if (context && context != active_context_) {
         ClearActiveContext("ContextChanged");
         active_context_ = context;
@@ -1217,13 +1273,24 @@ STDMETHODIMP HeshunTextService::OnKeyDown(ITfContext* context, WPARAM wparam, LP
     return S_OK;
 }
 
-STDMETHODIMP HeshunTextService::OnTestKeyUp(ITfContext*, WPARAM wparam, LPARAM, BOOL* eaten) {
+STDMETHODIMP HeshunTextService::OnTestKeyUp(ITfContext* context, WPARAM wparam, LPARAM lparam, BOOL* eaten) {
     if (!eaten) return E_INVALIDARG;
-    *eaten = wparam == VK_SHIFT ? TRUE : FALSE;
-    return S_OK;
+    test_key_down_pending_ = false;
+    if (test_key_up_pending_) {
+        *eaten = TRUE;
+        return S_OK;
+    }
+    HRESULT hr = OnKeyUp(context, wparam, lparam, eaten);
+    if (SUCCEEDED(hr) && *eaten) test_key_up_pending_ = true;
+    return hr;
 }
 STDMETHODIMP HeshunTextService::OnKeyUp(ITfContext* context, WPARAM wparam, LPARAM, BOOL* eaten) {
     if (!eaten) return E_INVALIDARG;
+    if (test_key_up_pending_) {
+        test_key_up_pending_ = false;
+        *eaten = TRUE;
+        return S_OK;
+    }
     *eaten = FALSE;
     if (wparam == VK_SHIFT) {
         const bool toggle = shift_down_ && !shift_used_with_other_key_;

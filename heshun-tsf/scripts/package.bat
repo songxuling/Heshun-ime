@@ -4,6 +4,7 @@ setlocal EnableExtensions
 set "BIN=%~f1"
 if "%~1"=="" set "BIN=%~dp0..\..\build-tsf\bin"
 set "DIST=%~dp0..\dist"
+if not "%~2"=="" set "DIST=%~f2"
 
 if not exist "%BIN%\heshun_tsf.dll" (
   echo TSF DLL not found: %BIN%\heshun_tsf.dll

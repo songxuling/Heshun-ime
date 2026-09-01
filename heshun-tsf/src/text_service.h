@@ -74,6 +74,7 @@ private:
     ~HeshunTextService();
 
     bool LoadEngine();
+    void RefreshPersistentInputMode();
     const char* ActiveSchemaId() const;
     const char* ActiveSchemaFile() const;
     const char* ActiveUserDictFile() const;
@@ -118,6 +119,8 @@ private:
     bool pinyin_mode_ = false;
     bool shift_down_ = false;
     bool shift_used_with_other_key_ = false;
+    bool test_key_down_pending_ = false;
+    bool test_key_up_pending_ = false;
     struct RuntimeCandidate {
         CandidateKey key;
         std::wstring word;

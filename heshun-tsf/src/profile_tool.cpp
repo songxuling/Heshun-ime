@@ -5,6 +5,12 @@
 #include "guids.h"
 
 namespace {
+std::wstring ClsidString() {
+    wchar_t buffer[64]{};
+    StringFromGUID2(CLSID_HeshunTextService, buffer, static_cast<int>(std::size(buffer)));
+    return buffer;
+}
+
 HRESULT GetProfiles(ITfInputProcessorProfiles** profiles) {
     *profiles = nullptr;
     return CoCreateInstance(CLSID_TF_InputProcessorProfiles, nullptr,
@@ -86,7 +92,11 @@ HRESULT Unregister() {
     ITfInputProcessorProfiles* profiles = nullptr;
     HRESULT hr = GetProfiles(&profiles);
     if (FAILED(hr)) { std::wcerr << L"Create profiles failed: 0x" << std::hex << static_cast<unsigned long>(hr) << L"\n"; return hr; }
-    profiles->RemoveLanguageProfile(CLSID_HeshunTextService, kHeshunLangId, GUID_PROFILE_HESHUN);
+    HRESULT remove_hr = profiles->RemoveLanguageProfile(CLSID_HeshunTextService, kHeshunLangId, GUID_PROFILE_HESHUN);
+    if (FAILED(remove_hr)) {
+        std::wcerr << L"RemoveLanguageProfile failed: 0x" << std::hex
+                   << static_cast<unsigned long>(remove_hr) << L"\n";
+    }
     // Remove profiles from older two-profile installations as well.
     profiles->RemoveLanguageProfile(CLSID_HeshunTextService, kHeshunLangId,
                                     GUID_PROFILE_HESHUN_LEGACY_ZHENGMA);
@@ -119,7 +129,27 @@ HRESULT Unregister() {
         categories->Release();
     }
     hr = profiles->Unregister(CLSID_HeshunTextService);
+    if (FAILED(hr)) {
+        std::wcerr << L"Profiles::Unregister failed: 0x" << std::hex
+                   << static_cast<unsigned long>(hr) << L"\n";
+    }
     profiles->Release();
+    // The CTF profile store can retain a stale per-TIP tree when the profile
+    // is active or the COM server was already removed.  Clean only Heshun's
+    // own HKCU tree after the API cleanup; never touch other TIPs.
+    const std::wstring tip_key = L"Software\\Microsoft\\CTF\\TIP\\" +
+                                 ClsidString();
+    const LONG cleanup = RegDeleteTreeW(HKEY_CURRENT_USER, tip_key.c_str());
+    if (cleanup != ERROR_SUCCESS && cleanup != ERROR_FILE_NOT_FOUND) {
+        std::wcerr << L"CTF registry cleanup failed: 0x" << std::hex
+                   << static_cast<unsigned long>(cleanup) << L"\n";
+        if (SUCCEEDED(hr)) hr = HRESULT_FROM_WIN32(cleanup);
+    } else {
+        // Removal is idempotent: an already-unregistered COM/profile entry
+        // may make the TSF API return E_FAIL even though our owned state is
+        // now completely gone.
+        hr = S_OK;
+    }
     return static_cast<int>(hr);
 }
 } // namespace
