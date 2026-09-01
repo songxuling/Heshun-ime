@@ -105,6 +105,15 @@ impl CoreState {
         self.page_index = 0;
         self.selected = None;
     }
+
+    fn rebuild_confirmed_text(&mut self) {
+        self.confirmed_text = self
+            .segments
+            .iter()
+            .filter(|segment| segment.confirmed)
+            .filter_map(|segment| segment.text.as_deref())
+            .collect();
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -257,6 +266,28 @@ impl CoreRuntime {
         &self.preceding_text
     }
 
+    pub fn edit_snapshot(&self) -> CoreState {
+        self.state.clone()
+    }
+
+    pub fn restore_edit_snapshot(&mut self, snapshot: CoreState) -> bool {
+        if !self.store.contains(&snapshot.schema) {
+            return false;
+        }
+        self.state = snapshot;
+        self.state.rebuild_confirmed_text();
+        if self.state.segments.is_empty() {
+            self.state.current_segment = 0;
+            self.state.clear_composition();
+            return true;
+        }
+        self.state.current_segment = self
+            .state
+            .current_segment
+            .min(self.state.segments.len() - 1);
+        self.focus_segment(self.state.current_segment)
+    }
+
     pub fn current_segment_index(&self) -> usize {
         self.state.current_segment
     }
@@ -292,13 +323,8 @@ impl CoreRuntime {
         if index >= self.state.segments.len() {
             return false;
         }
-        let segment = self.state.segments.remove(index);
-        if let Some(text) = segment.text {
-            if self.state.confirmed_text.ends_with(&text) {
-                let new_len = self.state.confirmed_text.len() - text.len();
-                self.state.confirmed_text.truncate(new_len);
-            }
-        }
+        let _segment = self.state.segments.remove(index);
+        self.state.rebuild_confirmed_text();
         if self.state.current_segment >= self.state.segments.len() {
             self.state.current_segment = self.state.segments.len().saturating_sub(1);
         }
@@ -387,6 +413,12 @@ impl CoreRuntime {
                 };
             }
             InputEvent::Backspace => {
+                if self.state.pending.is_empty()
+                    && self.state.current_segment > 0
+                {
+                    let _ = self.focus_segment(self.state.current_segment - 1);
+                    self.state.cursor = self.state.pending.chars().count();
+                }
                 if self.state.pending.is_empty() {
                     if self.revert_last_edit() {
                         self.reset_candidate_view();
@@ -409,9 +441,16 @@ impl CoreRuntime {
                         None,
                     );
                 }
+                if self.state.cursor == 0 && self.state.current_segment > 0 {
+                    let _ = self.focus_segment(self.state.current_segment - 1);
+                    self.state.cursor = self.state.pending.chars().count();
+                }
                 self.with_session(|session| {
                     session.backspace();
                 });
+                if self.state.pending.is_empty() && self.state.segments.len() > 1 {
+                    let _ = self.delete_segment(self.state.current_segment);
+                }
                 self.reset_candidate_view();
                 composition = if self.state.pending.is_empty() {
                     CompositionAction::End
@@ -419,7 +458,13 @@ impl CoreRuntime {
                     CompositionAction::Update
                 };
             }
-            InputEvent::Delete => disposition = EventDisposition::PassedThrough,
+            InputEvent::Delete => {
+                if self.delete_at_cursor() {
+                    composition = CompositionAction::Update;
+                } else {
+                    disposition = EventDisposition::PassedThrough;
+                }
+            }
             InputEvent::Escape | InputEvent::Reset => {
                 self.state.clear_composition();
                 self.state.confirmed_text.clear();
@@ -490,10 +535,7 @@ impl CoreRuntime {
                 }
             }
             InputEvent::MoveCursor(delta) => {
-                self.state.cursor = (self.state.cursor as i32 + delta)
-                    .clamp(0, self.state.pending.chars().count() as i32)
-                    as usize;
-                self.sync_current_segment_state();
+                self.move_cursor_across_segments(delta);
                 composition = if self.state.pending.is_empty() {
                     CompositionAction::End
                 } else {
@@ -534,6 +576,43 @@ impl CoreRuntime {
             snapshot: self.build_snapshot(),
             error,
         }
+    }
+
+    fn delete_at_cursor(&mut self) -> bool {
+        let len = self.state.pending.chars().count();
+        if self.state.cursor < len {
+            let mut chars: Vec<char> = self.state.pending.chars().collect();
+            chars.remove(self.state.cursor);
+            self.state.pending = chars.into_iter().collect();
+            self.state.sentence_candidates.clear();
+            self.state.page_index = 0;
+            self.state.selected = None;
+            self.sync_current_segment_state();
+            return true;
+        }
+        if self.state.current_segment + 1 < self.state.segments.len() {
+            self.sync_current_segment_state();
+            return self.delete_segment(self.state.current_segment + 1);
+        }
+        false
+    }
+
+    fn move_cursor_across_segments(&mut self, delta: i32) {
+        if delta < 0 && self.state.cursor == 0 && self.state.current_segment > 0 {
+            let _ = self.focus_segment(self.state.current_segment - 1);
+            self.state.cursor = self.state.pending.chars().count();
+        } else if delta > 0
+            && self.state.cursor >= self.state.pending.chars().count()
+            && self.state.current_segment + 1 < self.state.segments.len()
+        {
+            let _ = self.focus_segment(self.state.current_segment + 1);
+            self.state.cursor = 0;
+        } else {
+            self.state.cursor = (self.state.cursor as i32 + delta)
+                .clamp(0, self.state.pending.chars().count() as i32)
+                as usize;
+        }
+        self.sync_current_segment_state();
     }
 
     fn set_ascii(&mut self, value: bool) {
@@ -586,14 +665,15 @@ impl CoreRuntime {
                 page_index: 0,
                 selected: Some(key),
             };
-            if let Some(last) = self.state.segments.last_mut().filter(|segment| !segment.confirmed) {
-                *last = segment;
-                self.state.current_segment = self.state.segments.len() - 1;
+            if self.state.current_segment < self.state.segments.len()
+                && !self.state.segments[self.state.current_segment].confirmed
+            {
+                self.state.segments[self.state.current_segment] = segment;
             } else {
                 self.state.segments.push(segment);
                 self.state.current_segment = self.state.segments.len() - 1;
             }
-            self.state.confirmed_text.push_str(text);
+            self.state.rebuild_confirmed_text();
             self.history.push(CommitRecord {
                 text: text.clone(),
                 code,
@@ -663,6 +743,16 @@ impl CoreRuntime {
 
     fn sync_current_segment_state(&mut self) {
         if self.state.pending.is_empty() {
+            if self.state.current_segment < self.state.segments.len()
+                && !self.state.segments[self.state.current_segment].confirmed
+            {
+                self.state.segments.remove(self.state.current_segment);
+                self.state.current_segment = self
+                    .state
+                    .current_segment
+                    .min(self.state.segments.len().saturating_sub(1));
+                self.state.rebuild_confirmed_text();
+            }
             return;
         }
         let segment = Segment {
@@ -981,12 +1071,10 @@ mod tests {
             runtime.dispatch(InputEvent::Text(ch));
         }
         runtime.dispatch(InputEvent::ConfirmSegment);
-        eprintln!("after wo: {:?}", runtime.snapshot().segments.iter().map(|s| (&s.input, s.confirmed)).collect::<Vec<_>>());
         for ch in "zhong".chars() {
             runtime.dispatch(InputEvent::Text(ch));
         }
         runtime.dispatch(InputEvent::ConfirmSegment);
-        eprintln!("after zhong: {:?}", runtime.snapshot().segments.iter().map(|s| (&s.input, s.confirmed)).collect::<Vec<_>>());
         assert_eq!(runtime.current_segment_index(), 1);
         assert!(runtime.move_segment(-1));
         assert_eq!(runtime.current_segment_index(), 0);
@@ -1088,5 +1176,86 @@ mod tests {
         assert_eq!(result.disposition, EventDisposition::Consumed);
         assert_eq!(result.snapshot.pending, "wox");
         assert!(result.snapshot.status.composing);
+    }
+
+    #[test]
+    fn deleting_middle_segment_rebuilds_confirmed_text() {
+        let mut runtime = CoreRuntime::new(store(), "script").unwrap();
+        runtime.state.segments = vec![
+            Segment { input: "a".into(), text: Some("甲".into()), confirmed: true, cursor: 0, page_index: 0, selected: None },
+            Segment { input: "b".into(), text: Some("乙".into()), confirmed: true, cursor: 0, page_index: 0, selected: None },
+            Segment { input: "c".into(), text: Some("丙".into()), confirmed: true, cursor: 0, page_index: 0, selected: None },
+        ];
+        runtime.state.current_segment = 1;
+        runtime.state.rebuild_confirmed_text();
+        assert!(runtime.delete_segment(1));
+        assert_eq!(runtime.confirmed_text(), "甲丙");
+        assert_eq!(runtime.snapshot().segments.len(), 2);
+    }
+
+    #[test]
+    fn delete_at_cursor_removes_current_character_and_resets_menu() {
+        let mut runtime = CoreRuntime::new(store(), "script").unwrap();
+        for ch in "wox".chars() {
+            runtime.dispatch(InputEvent::Text(ch));
+        }
+        runtime.dispatch(InputEvent::MoveCursor(-1));
+        let result = runtime.dispatch(InputEvent::Delete);
+        assert_eq!(result.snapshot.pending, "wo");
+        assert_eq!(result.snapshot.cursor, 2);
+        assert_eq!(result.snapshot.candidates.page_index, 0);
+    }
+
+    #[test]
+    fn cursor_moves_across_segment_boundaries() {
+        let mut runtime = CoreRuntime::new(store(), "script").unwrap();
+        runtime.state.segments = vec![
+            Segment { input: "wo".into(), text: None, confirmed: false, cursor: 0, page_index: 0, selected: None },
+            Segment { input: "zhong".into(), text: None, confirmed: false, cursor: 0, page_index: 0, selected: None },
+        ];
+        runtime.state.current_segment = 1;
+        runtime.focus_segment(1);
+        runtime.dispatch(InputEvent::MoveCursor(-99));
+        assert_eq!(runtime.current_segment_index(), 0);
+        assert_eq!(runtime.snapshot().cursor, 2);
+        runtime.dispatch(InputEvent::MoveCursor(99));
+        assert_eq!(runtime.current_segment_index(), 1);
+        assert_eq!(runtime.snapshot().cursor, 0);
+    }
+
+    #[test]
+    fn cross_segment_backspace_and_delete_update_segment_list() {
+        let mut runtime = CoreRuntime::new(store(), "script").unwrap();
+        runtime.state.segments = vec![
+            Segment { input: "wo".into(), text: None, confirmed: false, cursor: 2, page_index: 0, selected: None },
+            Segment { input: "zhong".into(), text: None, confirmed: false, cursor: 0, page_index: 0, selected: None },
+        ];
+        runtime.state.current_segment = 1;
+        runtime.focus_segment(1);
+        runtime.dispatch(InputEvent::Backspace);
+        assert_eq!(runtime.current_segment_index(), 0);
+        assert_eq!(runtime.snapshot().pending, "w");
+        runtime.state.current_segment = 0;
+        runtime.state.pending = "wo".into();
+        runtime.state.cursor = 2;
+        runtime.dispatch(InputEvent::Delete);
+        assert_eq!(runtime.snapshot().segments.len(), 1);
+        assert_eq!(runtime.snapshot().pending, "wo");
+    }
+
+    #[test]
+    fn edit_snapshot_restores_segments_cursor_and_menu() {
+        let mut runtime = CoreRuntime::new(store(), "script").unwrap();
+        runtime.state.segments = vec![
+            Segment { input: "wo".into(), text: None, confirmed: false, cursor: 1, page_index: 2, selected: None },
+        ];
+        runtime.state.current_segment = 0;
+        runtime.focus_segment(0);
+        let snapshot = runtime.edit_snapshot();
+        runtime.dispatch(InputEvent::Text('x'));
+        assert!(runtime.restore_edit_snapshot(snapshot));
+        assert_eq!(runtime.snapshot().pending, "wo");
+        assert_eq!(runtime.snapshot().cursor, 1);
+        assert_eq!(runtime.snapshot().candidates.page_index, 2);
     }
 }
