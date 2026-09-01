@@ -397,7 +397,11 @@ private:
             }
             range->Release();
         }
-        if (SUCCEEDED(hr)) hr = composition->EndComposition(ec);
+        if (SUCCEEDED(hr)) {
+            service_->set_composition_end_in_progress(true);
+            hr = composition->EndComposition(ec);
+            service_->set_composition_end_in_progress(false);
+        }
         if (SUCCEEDED(hr)) service_->ClearComposition();
         Trace(FAILED(hr) ? "Composition: commit failed " + Hr(hr) : "Composition: committed");
         return hr;
@@ -422,7 +426,11 @@ private:
                 range->Release();
             }
         }
-        if (SUCCEEDED(hr)) hr = composition->EndComposition(ec);
+        if (SUCCEEDED(hr)) {
+            service_->set_composition_end_in_progress(true);
+            hr = composition->EndComposition(ec);
+            service_->set_composition_end_in_progress(false);
+        }
         if (SUCCEEDED(hr)) service_->ClearComposition();
         Trace(FAILED(hr) ? "Composition: cancel failed " + Hr(hr) : "Composition: cancelled");
         return hr;
@@ -443,6 +451,26 @@ std::wstring Utf8ToUtf16(const char* value) {
     std::wstring result(static_cast<size_t>(needed), L'\0');
     if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value, length, result.data(), needed)) return {};
     return result;
+}
+
+std::string Utf16ToUtf8(const std::wstring& value) {
+    if (value.empty()) return {};
+    const int needed = WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
+    if (!needed) return {};
+    std::string result(static_cast<size_t>(needed), '\0');
+    if (!WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), result.data(), needed, nullptr, nullptr)) return {};
+    return result;
+}
+
+std::wstring ShiftOemSymbol(WPARAM key, LPARAM lparam) {
+    if ((GetKeyState(VK_SHIFT) & 0x8000) == 0 || key < VK_OEM_1 || key > VK_OEM_8) return {};
+    BYTE state[256]{};
+    if (!GetKeyboardState(state)) return {};
+    wchar_t symbol[4]{};
+    const int written = ToUnicodeEx(static_cast<UINT>(key), static_cast<UINT>((lparam >> 16) & 0xff),
+                                    state, symbol, static_cast<int>(std::size(symbol)), 0,
+                                    GetKeyboardLayout(0));
+    return written > 0 ? std::wstring(symbol, symbol + written) : std::wstring{};
 }
 
 std::wstring Utf8ViewToUtf16(hs_text_view view) {
@@ -544,6 +572,8 @@ STDMETHODIMP HeshunTextService::QueryInterface(REFIID riid, void** object) {
         *object = static_cast<ITfTextInputProcessorEx*>(this);
     } else if (riid == IID_ITfKeyEventSink) {
         *object = static_cast<ITfKeyEventSink*>(this);
+    } else if (riid == IID_ITfThreadMgrEventSink) {
+        *object = static_cast<ITfThreadMgrEventSink*>(this);
     } else if (riid == IID_ITfActiveLanguageProfileNotifySink) {
         *object = static_cast<ITfActiveLanguageProfileNotifySink*>(this);
     } else if (riid == IID_ITfDisplayAttributeProvider) {
@@ -578,6 +608,18 @@ STDMETHODIMP HeshunTextService::ActivateEx(ITfThreadMgr* thread_mgr, TfClientId 
     Trace("ActivateEx: engine loaded");
 
     HRESULT hr = E_FAIL;
+    ITfSource* thread_source = nullptr;
+    hr = thread_mgr_->QueryInterface(IID_PPV_ARGS(&thread_source));
+    if (SUCCEEDED(hr)) {
+        hr = thread_source->AdviseSink(IID_ITfThreadMgrEventSink,
+                                       static_cast<ITfThreadMgrEventSink*>(this),
+                                       &thread_mgr_event_sink_cookie_);
+        thread_source->Release();
+    }
+    Trace("ActivateEx: thread manager event sink advise " + Hr(hr));
+    if (FAILED(hr)) { Deactivate(); return hr; }
+
+    hr = E_FAIL;
     ITfCategoryMgr* categories = nullptr;
     hr = CoCreateInstance(CLSID_TF_CategoryMgr, nullptr, CLSCTX_INPROC_SERVER,
                            IID_PPV_ARGS(&categories));
@@ -643,6 +685,15 @@ STDMETHODIMP HeshunTextService::ActivateEx(ITfThreadMgr* thread_mgr, TfClientId 
 }
 
 STDMETHODIMP HeshunTextService::Deactivate() {
+    if (thread_mgr_ && thread_mgr_event_sink_cookie_ != TF_INVALID_COOKIE) {
+        ITfSource* source = nullptr;
+        if (SUCCEEDED(thread_mgr_->QueryInterface(IID_PPV_ARGS(&source)))) {
+            const HRESULT hr = source->UnadviseSink(thread_mgr_event_sink_cookie_);
+            Trace("Deactivate: thread manager event sink unadvise " + Hr(hr));
+            source->Release();
+        }
+        thread_mgr_event_sink_cookie_ = TF_INVALID_COOKIE;
+    }
     UninitActiveLanguageProfileNotifySink();
     if (langbar_mgr_) {
         if (langbar_item_) {
@@ -876,6 +927,20 @@ void HeshunTextService::FreeEngine() {
     has_selected_key_ = false;
 }
 
+void HeshunTextService::ClearActiveContext(const char* reason) {
+    if (active_context_) {
+        const HRESULT cancel_hr = CancelComposition(active_context_);
+        Trace(FAILED(cancel_hr) ? std::string(reason) + ": composition cancel failed " + Hr(cancel_hr)
+                                : std::string(reason) + ": composition cancelled");
+        DispatchRuntime(12);
+        if (candidate_window_) candidate_window_->Hide();
+        active_context_->Release();
+        active_context_ = nullptr;
+    } else if (candidate_window_) {
+        candidate_window_->Hide();
+    }
+}
+
 HRESULT HeshunTextService::UpdateComposition(ITfContext* context) {
     if (!context || !runtime_) return E_INVALIDARG;
     const std::wstring text = pending_;
@@ -1050,41 +1115,52 @@ bool HeshunTextService::FeedKey(WPARAM key, std::string& committed) {
 
 STDMETHODIMP HeshunTextService::OnSetFocus(BOOL foreground) {
     if (foreground) return S_OK;
+    ClearActiveContext("FocusLost");
+    return S_OK;
+}
 
-    // A TSF context can disappear while the service still owns its last
-    // reference. End the composition and reset the owned runtime before the
-    // old context is released; otherwise a later host can inherit stale
-    // preedit/candidates or receive a commit targeted at the wrong document.
-    if (active_context_) {
-        const HRESULT cancel_hr = CancelComposition(active_context_);
-        Trace(FAILED(cancel_hr) ? "FocusLost: composition cancel failed " + Hr(cancel_hr)
-                                : "FocusLost: composition cancelled");
-        DispatchRuntime(12);
-        if (candidate_window_) candidate_window_->Hide();
-        active_context_->Release();
-        active_context_ = nullptr;
+STDMETHODIMP HeshunTextService::OnInitDocumentMgr(ITfDocumentMgr*) {
+    return S_OK;
+}
+
+STDMETHODIMP HeshunTextService::OnUninitDocumentMgr(ITfDocumentMgr* document_manager) {
+    if (!active_context_ || !document_manager) return S_OK;
+    ITfDocumentMgr* owner = nullptr;
+    if (SUCCEEDED(active_context_->GetDocumentMgr(&owner))) {
+        if (owner == document_manager) ClearActiveContext("DocumentMgrUninit");
+        owner->Release();
     }
     return S_OK;
 }
-STDMETHODIMP HeshunTextService::OnTestKeyDown(ITfContext*, WPARAM wparam, LPARAM, BOOL* eaten) {
+
+STDMETHODIMP HeshunTextService::OnSetFocus(ITfDocumentMgr* focused_document_manager,
+                                           ITfDocumentMgr*) {
+    ITfContext* focused_context = nullptr;
+    if (focused_document_manager) focused_document_manager->GetTop(&focused_context);
+    if (focused_context != active_context_) ClearActiveContext("DocumentFocusChanged");
+    if (focused_context) focused_context->Release();
+    return S_OK;
+}
+
+STDMETHODIMP HeshunTextService::OnPushContext(ITfContext*) {
+    return S_OK;
+}
+
+STDMETHODIMP HeshunTextService::OnPopContext(ITfContext* context) {
+    if (context == active_context_) ClearActiveContext("ContextPopped");
+    return S_OK;
+}
+STDMETHODIMP HeshunTextService::OnTestKeyDown(ITfContext*, WPARAM wparam, LPARAM lparam, BOOL* eaten) {
     if (!eaten) return E_INVALIDARG;
-    *eaten = IsHandledKey(wparam) ? TRUE : FALSE;
+    *eaten = (IsHandledKey(wparam) || (HasPending() && !ShiftOemSymbol(wparam, lparam).empty())) ? TRUE : FALSE;
     if (*eaten) Trace("OnTestKeyDown: handled");
     return S_OK;
 }
 
-STDMETHODIMP HeshunTextService::OnKeyDown(ITfContext* context, WPARAM wparam, LPARAM, BOOL* eaten) {
+STDMETHODIMP HeshunTextService::OnKeyDown(ITfContext* context, WPARAM wparam, LPARAM lparam, BOOL* eaten) {
     if (!eaten) return E_INVALIDARG;
     if (context && context != active_context_) {
-        if (active_context_) {
-            const HRESULT cancel_hr = CancelComposition(active_context_);
-            Trace(FAILED(cancel_hr) ? "ContextChanged: composition cancel failed " + Hr(cancel_hr)
-                                    : "ContextChanged: composition cancelled");
-            DispatchRuntime(12);
-            if (candidate_window_) candidate_window_->Hide();
-            active_context_->Release();
-            active_context_ = nullptr;
-        }
+        ClearActiveContext("ContextChanged");
         active_context_ = context;
         active_context_->AddRef();
         Trace("ContextChanged: active context replaced");
@@ -1102,6 +1178,18 @@ STDMETHODIMP HeshunTextService::OnKeyDown(ITfContext* context, WPARAM wparam, LP
         return S_OK;
     }
     if (shift_down_) shift_used_with_other_key_ = true;
+    if (HasPending()) {
+        const std::wstring symbol = ShiftOemSymbol(wparam, lparam);
+        if (!symbol.empty()) {
+            const std::string text = Utf16ToUtf8(pending_ + symbol);
+            if (text.empty()) return E_FAIL;
+            *eaten = TRUE;
+            DispatchRuntime(3);
+            if (candidate_window_) candidate_window_->Hide();
+            Trace("ShiftSymbol: committing pending plus symbol");
+            return CommitText(context, text.c_str());
+        }
+    }
     if (!IsHandledKey(wparam)) return S_OK;
     Trace("OnKeyDown: handled");
     std::string committed;
@@ -1168,9 +1256,28 @@ STDMETHODIMP HeshunTextService::GetDisplayAttributeInfo(REFGUID guid, ITfDisplay
     return S_OK;
 }
 
-STDMETHODIMP HeshunTextService::OnCompositionTerminated(TfEditCookie, ITfComposition* composition) {
+STDMETHODIMP HeshunTextService::OnCompositionTerminated(TfEditCookie ec_write, ITfComposition* composition) {
     if (composition_ && composition == composition_) {
         Trace("Composition: terminated by host");
+        if (!composition_end_in_progress()) {
+            ITfRange* range = nullptr;
+            HRESULT hr = composition->GetRange(&range);
+            if (SUCCEEDED(hr) && range) {
+                if (active_context_) {
+                    ITfProperty* attribute = nullptr;
+                    if (SUCCEEDED(active_context_->GetProperty(GUID_PROP_ATTRIBUTE, &attribute))) {
+                        const HRESULT clear_hr = attribute->Clear(ec_write, range);
+                        Trace("Composition: external ClearAttribute " + Hr(clear_hr));
+                        attribute->Release();
+                    }
+                }
+                hr = range->SetText(ec_write, 0, L"", 0);
+                Trace("Composition: external ClearText " + Hr(hr));
+                range->Release();
+            }
+            if (candidate_window_) candidate_window_->Hide();
+            DispatchRuntime(12);
+        }
         ClearComposition();
     }
     return S_OK;

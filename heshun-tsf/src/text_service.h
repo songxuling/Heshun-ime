@@ -14,6 +14,7 @@ struct IHeshunLangBarStatus {
 
 class HeshunTextService final : public ITfTextInputProcessorEx,
                                 public ITfKeyEventSink,
+                                public ITfThreadMgrEventSink,
                                 public ITfActiveLanguageProfileNotifySink,
                                 public ITfDisplayAttributeProvider,
                                 public ITfCompositionSink {
@@ -43,6 +44,14 @@ public:
     STDMETHODIMP OnKeyUp(ITfContext* context, WPARAM wparam, LPARAM lparam, BOOL* eaten) override;
     STDMETHODIMP OnPreservedKey(ITfContext* context, REFGUID guid, BOOL* eaten) override;
 
+    // ITfThreadMgrEventSink
+    STDMETHODIMP OnInitDocumentMgr(ITfDocumentMgr* document_manager) override;
+    STDMETHODIMP OnUninitDocumentMgr(ITfDocumentMgr* document_manager) override;
+    STDMETHODIMP OnSetFocus(ITfDocumentMgr* focused_document_manager,
+                            ITfDocumentMgr* previous_document_manager) override;
+    STDMETHODIMP OnPushContext(ITfContext* context) override;
+    STDMETHODIMP OnPopContext(ITfContext* context) override;
+
     // ITfActiveLanguageProfileNotifySink
     STDMETHODIMP OnActivated(REFCLSID clsid, REFGUID profile, BOOL activated) override;
 
@@ -54,6 +63,8 @@ public:
     STDMETHODIMP OnCompositionTerminated(TfEditCookie ec_write, ITfComposition* composition) override;
 
     ITfComposition* composition() const { return composition_; }
+    bool composition_end_in_progress() const { return composition_end_in_progress_; }
+    void set_composition_end_in_progress(bool value) { composition_end_in_progress_ = value; }
     TfGuidAtom display_attribute_atom() const { return display_attribute_atom_; }
     void SetComposition(ITfComposition* composition);
     void ClearComposition();
@@ -87,14 +98,17 @@ private:
     HRESULT InitActiveLanguageProfileNotifySink();
     void UninitActiveLanguageProfileNotifySink();
     void ShowLanguageBar(bool show);
+    void ClearActiveContext(const char* reason);
 
     volatile LONG ref_count_ = 1;
     ITfThreadMgr* thread_mgr_ = nullptr;
     TfClientId client_id_ = TF_CLIENTID_NULL;
     DWORD key_sink_cookie_ = TF_INVALID_COOKIE;
+    DWORD thread_mgr_event_sink_cookie_ = TF_INVALID_COOKIE;
     DWORD active_profile_sink_cookie_ = TF_INVALID_COOKIE;
     hs_handle* runtime_ = nullptr;
     ITfComposition* composition_ = nullptr;
+    bool composition_end_in_progress_ = false;
     ITfLangBarItemMgr* langbar_mgr_ = nullptr;
     ITfLangBarItem* langbar_item_ = nullptr;
     IHeshunLangBarStatus* langbar_status_ = nullptr;

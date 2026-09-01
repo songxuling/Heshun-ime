@@ -2,13 +2,13 @@
 
 ## Target
 
-`heshun-tsf/` is the native Windows TSF shell for the Rust `heshun` engine. The first vertical slice intentionally implements only direct commits:
+`heshun-tsf/` is the native Windows TSF shell for the Rust `heshun` engine. The current vertical slice includes composition/preedit and candidate plumbing in addition to direct commits:
 
 ```text
 ITfKeyEventSink → heshun C ABI → ITfEditSession → ITfInsertAtSelection
 ```
 
-It does not yet provide composition/preedit text or a candidate window.
+Composition updates use a separate edit session after `StartComposition`; candidate display is an independent non-activating window path. Real-host rendering and the complete lifecycle matrix remain to be verified.
 
 ## Required interfaces
 
@@ -47,7 +47,7 @@ On this Windows SDK, `msctf.h` exists but `msctf.lib` does not; do not link `msc
 
 - `regsvr32` verifies COM registration of the DLL.
 - A COM activation probe verifies `CoCreateInstance` can create `ITfTextInputProcessorEx`.
-- Actual `ITfInputProcessorProfiles::Register` / `AddLanguageProfile` and keyboard-category registration write CTF configuration. On this host they returned `E_FAIL` when run unelevated. Run `scripts\register.bat` from an elevated x64 VS Developer Command Prompt.
+- Actual `ITfInputProcessorProfiles::Register` / `AddLanguageProfile` and keyboard-category registration write CTF configuration. Run `scripts\register.bat` from an elevated x64 VS Developer Command Prompt when changing the registered DLL.
 - Run `scripts\unregister.bat` from the same elevation context to remove profile/category and COM registration.
 
 ## Verified locally
@@ -56,4 +56,4 @@ On this Windows SDK, `msctf.h` exists but `msctf.lib` does not; do not link `msc
 - Required COM exports pass CTest.
 - `regsvr32` COM register/unregister roundtrip passes.
 - Registered DLL passes `CoCreateInstance(CLSID_HeshunTextService, IID_ITfTextInputProcessorEx)`.
-- Core Rust tests: 52 passing.
+- Core Rust release build and the current TSF CTest baseline must be recorded separately from real-host verification; a successful COM probe does not prove composition or host input.

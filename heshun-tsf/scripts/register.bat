@@ -11,6 +11,7 @@ set "DLL=%~f1"
 if "%~1"=="" set "DLL=%~dp0heshun_tsf.dll"
 if not exist "%DLL%" set "DLL=%~dp0..\..\build-tsf\bin\heshun_tsf.dll"
 set "TOOL=%~dp0heshun_tsf_profile.exe"
+if not "%~1"=="" if exist "%~dp1heshun_tsf_profile.exe" set "TOOL=%~dp1heshun_tsf_profile.exe"
 if not exist "%TOOL%" set "TOOL=%~dp0..\..\build-tsf\bin\heshun_tsf_profile.exe"
 if not exist "%DLL%" (
   echo DLL not found: %DLL%
@@ -37,6 +38,7 @@ if "%DLL%"=="" (
   echo Missing absolute DLL path handoff from elevation parent.
   exit /b 1
 )
+for %%I in ("%DLL%") do if exist "%%~dpIheshun_tsf_profile.exe" set "TOOL=%%~dpIheshun_tsf_profile.exe"
 if not exist "%TOOL%" set "TOOL=%~dp0heshun_tsf_profile.exe"
 if not exist "%TOOL%" set "TOOL=%~dp0..\..\build-tsf\bin\heshun_tsf_profile.exe"
 

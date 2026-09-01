@@ -8,7 +8,7 @@ Windows TSF (Text Services Framework) shell for the `heshun` Rust input-method e
 - Intercepts `a-z`, Backspace, Escape, Space, and `1-9` through `ITfKeyEventSink`.
 - Loads `zhengma66.schema.yaml` or `pinyin_full.schema.yaml` through the Rust C ABI, selected internally by the input-method toggle.
 - Commits returned text into the focused application through an asynchronous TSF edit session.
-- Shows a native non-activating candidate window; Composition/preedit underline remains deferred.
+- Starts and updates a TSF composition/preedit through separate edit sessions, applies the registered display attribute, and shows a native non-activating candidate window. Host-visible rendering still requires real-application verification.
 
 ## Current behavior
 
