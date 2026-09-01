@@ -21,6 +21,7 @@ class HeshunTextService final : public ITfTextInputProcessorEx,
 public:
     HeshunTextService();
     void ToggleInputMethodFromLangBar();
+    void SelectInputMethodFromLangBar(bool pinyin);
     bool IsPinyinMode() const { return pinyin_mode_; }
     bool ascii_mode() const { return ascii_mode_; }
 

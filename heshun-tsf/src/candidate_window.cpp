@@ -77,7 +77,32 @@ void CandidateWindow::Show(std::wstring pending, std::vector<std::wstring> candi
         return;
     }
 
-    const int dpi = DpiForWindow(window_);
+    // Resolve the anchor caret before sizing/placing the popup.  rcCaret from
+    // GetGUIThreadInfo is client-relative to hwndCaret; the previous code
+    // sized from the popup's old monitor and could also use an unconverted
+    // caret rectangle, which breaks on per-monitor DPI and secondary displays.
+    GUITHREADINFO info{sizeof(info)};
+    HWND foreground = GetForegroundWindow();
+    POINT anchor{};
+    HWND anchor_window = nullptr;
+    const bool has_caret = foreground &&
+        GetGUIThreadInfo(GetWindowThreadProcessId(foreground, nullptr), &info) &&
+        info.hwndCaret && info.rcCaret.right >= info.rcCaret.left &&
+        info.rcCaret.bottom >= info.rcCaret.top;
+    if (has_caret) {
+        anchor = POINT{info.rcCaret.left, info.rcCaret.bottom};
+        anchor_window = info.hwndCaret;
+        if (!ClientToScreen(anchor_window, &anchor)) anchor_window = nullptr;
+    }
+    if (!anchor_window) {
+        anchor = POINT{foreground ? 0 : 24, foreground ? 0 : 24};
+        anchor_window = foreground;
+        if (anchor_window) {
+            ClientToScreen(anchor_window, &anchor);
+        }
+    }
+
+    const int dpi = DpiForWindow(anchor_window ? anchor_window : window_);
     const int scale = dpi;
     const int header = MulDiv(kHeaderHeight, scale, 96);
     const int row = MulDiv(kRowHeight, scale, 96);
@@ -89,26 +114,16 @@ void CandidateWindow::Show(std::wstring pending, std::vector<std::wstring> candi
     AdjustWindowRectExForDpi(&frame, WS_POPUP, FALSE, WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST, dpi);
     const int width = frame.right - frame.left;
     const int height = frame.bottom - frame.top;
-    // Keep the window near the foreground caret without activating it.
-    GUITHREADINFO info{sizeof(info)};
-    HWND foreground = GetForegroundWindow();
-    HMONITOR monitor = MonitorFromWindow(foreground ? foreground : window_, MONITOR_DEFAULTTONEAREST);
+
+    HMONITOR monitor = MonitorFromPoint(anchor, MONITOR_DEFAULTTONEAREST);
     MONITORINFO monitor_info{sizeof(monitor_info)};
     GetMonitorInfoW(monitor, &monitor_info);
     const RECT work = monitor_info.rcWork;
-    if (foreground && GetGUIThreadInfo(GetWindowThreadProcessId(foreground, nullptr), &info) && info.rcCaret.right > info.rcCaret.left) {
-        POINT point{info.rcCaret.left, info.rcCaret.bottom};
-        ClientToScreen(info.hwndCaret ? info.hwndCaret : foreground, &point);
-    const int x = std::clamp(point.x, work.left, std::max(work.left, work.right - width));
-        const int y = std::clamp(point.y + 4, work.top, std::max(work.top, work.bottom - height));
-        SetWindowPos(window_, HWND_TOPMOST, x, y, width, height,
-                     SWP_NOACTIVATE | SWP_SHOWWINDOW);
-    } else {
-        const int x = std::clamp(work.left + 24, work.left, std::max(work.left, work.right - width));
-        const int y = std::clamp(work.top + 24, work.top, std::max(work.top, work.bottom - height));
-        SetWindowPos(window_, HWND_TOPMOST, x, y, width, height,
-                     SWP_NOACTIVATE | SWP_SHOWWINDOW);
-    }
+    const int x = std::clamp(anchor.x, work.left, std::max(work.left, work.right - width));
+    const int y = std::clamp(anchor.y + (has_caret ? 4 : 0),
+                             work.top, std::max(work.top, work.bottom - height));
+    SetWindowPos(window_, HWND_TOPMOST, x, y, width, height,
+                 SWP_NOACTIVATE | SWP_SHOWWINDOW);
     InvalidateRect(window_, nullptr, TRUE);
     UpdateWindow(window_);
     caret_visible_ = true;

@@ -32,6 +32,8 @@ namespace {
 
 void Trace(const std::string& message);
 std::string Hr(HRESULT hr);
+constexpr UINT kLangBarMenuZhengma = 1;
+constexpr UINT kLangBarMenuPinyin = 2;
 
 HICON CreateModeIcon(bool ascii_mode) {
     const wchar_t* text = ascii_mode ? L"EN" : L"CH";
@@ -139,8 +141,28 @@ public:
         if (click == TF_LBI_CLK_LEFT) service_->ToggleInputMethodFromLangBar();
         return S_OK;
     }
-    STDMETHODIMP InitMenu(ITfMenu*) override { Trace("LangBarItem: InitMenu"); return S_OK; }
-    STDMETHODIMP OnMenuSelect(UINT) override { return S_OK; }
+    STDMETHODIMP InitMenu(ITfMenu* menu) override {
+        if (!menu) return E_INVALIDARG;
+        const DWORD zhengma_flags = service_->IsPinyinMode() ? 0 : TF_LBMENUF_RADIOCHECKED;
+        const DWORD pinyin_flags = service_->IsPinyinMode() ? TF_LBMENUF_RADIOCHECKED : 0;
+        HRESULT hr = menu->AddMenuItem(kLangBarMenuZhengma, zhengma_flags, nullptr, nullptr,
+                                       L"郑码", 2, nullptr);
+        if (SUCCEEDED(hr)) {
+            hr = menu->AddMenuItem(kLangBarMenuPinyin, pinyin_flags, nullptr, nullptr,
+                                   L"全拼", 2, nullptr);
+        }
+        Trace("LangBarItem: InitMenu " + Hr(hr));
+        return hr;
+    }
+    STDMETHODIMP OnMenuSelect(UINT id) override {
+        if (id == kLangBarMenuZhengma && service_->IsPinyinMode()) {
+            service_->SelectInputMethodFromLangBar(false);
+        } else if (id == kLangBarMenuPinyin && !service_->IsPinyinMode()) {
+            service_->SelectInputMethodFromLangBar(true);
+        }
+        Trace("LangBarItem: OnMenuSelect id=" + std::to_string(id));
+        return S_OK;
+    }
     STDMETHODIMP GetIcon(HICON* icon) override {
         if (!icon) return E_INVALIDARG;
         *icon = CreateModeIcon(service_->ascii_mode());
@@ -1086,6 +1108,10 @@ void HeshunTextService::ToggleInputMethod(ITfContext* context) {
 
 void HeshunTextService::ToggleInputMethodFromLangBar() {
     ToggleAsciiMode(active_context_);
+}
+
+void HeshunTextService::SelectInputMethodFromLangBar(bool pinyin) {
+    if (pinyin != pinyin_mode_) ToggleInputMethod(active_context_);
 }
 
 bool HeshunTextService::IsHandledKey(WPARAM key) const {
