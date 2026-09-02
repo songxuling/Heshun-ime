@@ -36,43 +36,11 @@ constexpr UINT kLangBarMenuZhengma = 1;
 constexpr UINT kLangBarMenuPinyin = 2;
 
 HICON CreateModeIcon(bool ascii_mode) {
-    const wchar_t* text = ascii_mode ? L"EN" : L"CH";
-    const int width = std::max(16, GetSystemMetrics(SM_CXSMICON));
-    const int height = std::max(16, GetSystemMetrics(SM_CYSMICON));
-    HDC screen = GetDC(nullptr);
-    if (!screen) return nullptr;
-    HDC dc = CreateCompatibleDC(screen);
-    HBITMAP color = CreateCompatibleBitmap(screen, width, height);
-    HBITMAP mask = CreateBitmap(width, height, 1, 1, nullptr);
-    HICON icon = nullptr;
-    if (dc && color && mask) {
-        HGDIOBJ old = SelectObject(dc, color);
-        RECT rect{0, 0, width, height};
-        HBRUSH bg = CreateSolidBrush(ascii_mode ? RGB(96, 96, 96) : RGB(0, 120, 215));
-        FillRect(dc, &rect, bg ? bg : reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
-        if (bg) DeleteObject(bg);
-        SetBkMode(dc, TRANSPARENT);
-        SetTextColor(dc, RGB(255, 255, 255));
-        HFONT font = CreateFontW(-MulDiv(9, GetDeviceCaps(screen, LOGPIXELSY), 72), 0, 0, 0, FW_BOLD,
-                                 FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                                 CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
-                                 L"Microsoft YaHei UI");
-        HGDIOBJ old_font = font ? SelectObject(dc, font) : nullptr;
-        DrawTextW(dc, text, -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-        if (old_font) SelectObject(dc, old_font);
-        if (font) DeleteObject(font);
-        SelectObject(dc, old);
-        ICONINFO info{};
-        info.fIcon = TRUE;
-        info.hbmColor = color;
-        info.hbmMask = mask;
-        icon = CreateIconIndirect(&info);
-    }
-    if (mask) DeleteObject(mask);
-    if (color) DeleteObject(color);
-    if (dc) DeleteDC(dc);
-    ReleaseDC(nullptr, screen);
-    return icon;
+    const int size = std::max(16, GetSystemMetrics(SM_CXSMICON));
+    const int resource_id = ascii_mode ? IDI_HESHUN_EN_ICON : IDI_HESHUN_ZH_ICON;
+    return static_cast<HICON>(LoadImageW(
+        g_module_instance, MAKEINTRESOURCEW(resource_id), IMAGE_ICON, size, size,
+        LR_DEFAULTCOLOR));
 }
 
 class HeshunLangBarItem final : public ITfLangBarItemButton, public ITfSource, public IHeshunLangBarStatus {

@@ -1,3 +1,5 @@
 #include "resource.h"
 
 IDI_HESHUN_ICON ICON "..\\assets\\heshun.ico"
+IDI_HESHUN_ZH_ICON ICON "..\\assets\\heshun-zh.ico"
+IDI_HESHUN_EN_ICON ICON "..\\assets\\heshun-en.ico"
