@@ -137,8 +137,32 @@ public:
         *tooltip = SysAllocString(value.c_str());
         return *tooltip ? S_OK : E_OUTOFMEMORY;
     }
-    STDMETHODIMP OnClick(TfLBIClick click, POINT, const RECT*) override {
-        if (click == TF_LBI_CLK_LEFT) service_->ToggleInputMethodFromLangBar();
+    STDMETHODIMP OnClick(TfLBIClick click, POINT point, const RECT*) override {
+        if (click == TF_LBI_CLK_LEFT) {
+            service_->ToggleInputMethodFromLangBar();
+        } else if (click == TF_LBI_CLK_RIGHT) {
+            // Match WeaselTSF: use the focused context as the popup owner.
+            HWND owner = service_->FocusedContextWindow();
+            if (owner) {
+                HMENU menu = CreatePopupMenu();
+                if (menu) {
+                    AppendMenuW(menu, MF_STRING | MF_ENABLED,
+                                kLangBarMenuZhengma, L"郑码");
+                    AppendMenuW(menu, MF_STRING | MF_ENABLED,
+                                kLangBarMenuPinyin, L"全拼");
+                    CheckMenuRadioItem(
+                        menu, kLangBarMenuZhengma, kLangBarMenuPinyin,
+                        service_->IsPinyinMode() ? kLangBarMenuPinyin
+                                                 : kLangBarMenuZhengma,
+                        MF_BYCOMMAND);
+                    const UINT selected = TrackPopupMenuEx(
+                        menu, TPM_NONOTIFY | TPM_RETURNCMD | TPM_RIGHTBUTTON,
+                        point.x, point.y, owner, nullptr);
+                    DestroyMenu(menu);
+                    if (selected != 0) OnMenuSelect(selected);
+                }
+            }
+        }
         return S_OK;
     }
     STDMETHODIMP InitMenu(ITfMenu* menu) override {
@@ -609,6 +633,27 @@ HeshunTextService::HeshunTextService() {
     pinyin_mode_ = LoadPinyinMode();
     InterlockedIncrement(&g_object_count);
 }
+
+HWND HeshunTextService::FocusedContextWindow() const {
+    if (!thread_mgr_) return nullptr;
+    ITfDocumentMgr* document_manager = nullptr;
+    if (FAILED(thread_mgr_->GetFocus(&document_manager)) || !document_manager) {
+        return nullptr;
+    }
+    ITfContext* context = nullptr;
+    HWND window = nullptr;
+    if (SUCCEEDED(document_manager->GetTop(&context)) && context) {
+        ITfContextView* view = nullptr;
+        if (SUCCEEDED(context->GetActiveView(&view)) && view) {
+            view->GetWnd(&window);
+            view->Release();
+        }
+        context->Release();
+    }
+    document_manager->Release();
+    return window;
+}
+
 HeshunTextService::~HeshunTextService() {
     Deactivate();
     InterlockedDecrement(&g_object_count);
