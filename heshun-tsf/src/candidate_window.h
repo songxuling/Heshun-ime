@@ -25,6 +25,7 @@ public:
 
     void Show(std::wstring pending, std::vector<std::wstring> candidates, std::vector<CandidateKey> keys, unsigned int page_index, unsigned int page_size, unsigned int total, unsigned int cursor);
     void Hide();
+    void SetAnchorRect(const RECT& rect);
     void SetCandidateClickHandler(std::function<void(CandidateKey)> handler);
     void MoveSelection(int direction);
     void UseKeyboardSelection();
@@ -49,4 +50,6 @@ private:
     size_t selected_index_ = 0;
     bool keyboard_selection_ = false;
     bool caret_visible_ = true;
+    RECT anchor_rect_{};
+    bool has_anchor_rect_ = false;
 };

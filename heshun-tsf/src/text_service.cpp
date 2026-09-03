@@ -35,6 +35,14 @@ std::string Hr(HRESULT hr);
 constexpr UINT kLangBarMenuZhengma = 1;
 constexpr UINT kLangBarMenuPinyin = 2;
 
+bool IsRangeCovered(TfEditCookie edit_cookie, ITfRange* tested, ITfRange* covering) {
+    if (!tested || !covering) return false;
+    LONG result = 0;
+    if (FAILED(covering->CompareStart(edit_cookie, tested, TF_ANCHOR_START, &result)) || result > 0) return false;
+    if (FAILED(covering->CompareEnd(edit_cookie, tested, TF_ANCHOR_END, &result)) || result < 0) return false;
+    return true;
+}
+
 HICON CreateModeIcon(bool ascii_mode) {
     const int size = std::max(16, GetSystemMetrics(SM_CXSMICON));
     const int resource_id = ascii_mode ? IDI_HESHUN_EN_ICON : IDI_HESHUN_ZH_ICON;
@@ -362,8 +370,17 @@ private:
                 ITfRange* caret_range = nullptr;
                 const HRESULT clone_hr = range->Clone(&caret_range);
                 if (SUCCEEDED(clone_hr)) {
-                    const HRESULT collapse_hr = caret_range->Collapse(ec, TF_ANCHOR_END);
+                    const HRESULT collapse_hr = caret_range->Collapse(ec, TF_ANCHOR_START);
                     if (SUCCEEDED(collapse_hr)) {
+                        LONG shifted = 0;
+                        const LONG target = static_cast<LONG>(service_->composition_cursor());
+                        const HRESULT shift_hr = caret_range->ShiftStart(ec, target, &shifted, nullptr);
+                        if (FAILED(shift_hr) || shifted != target) {
+                            Trace("Composition: ShiftCaret " + Hr(FAILED(shift_hr) ? shift_hr : E_FAIL));
+                            hr = FAILED(shift_hr) ? shift_hr : E_FAIL;
+                        }
+                    }
+                    if (SUCCEEDED(collapse_hr) && SUCCEEDED(hr)) {
                         TF_SELECTION selection{};
                         selection.range = caret_range;
                         selection.style.ase = TF_AE_NONE;
@@ -455,6 +472,65 @@ private:
     ITfContext* context_ = nullptr;
     Action action_;
     std::wstring text_;
+};
+
+class LayoutEditSession final : public ITfEditSession {
+public:
+    LayoutEditSession(HeshunTextService* service, ITfContext* context, ITfContextView* view)
+        : service_(service), context_(context), view_(view) {
+        service_->AddRef();
+        context_->AddRef();
+        view_->AddRef();
+    }
+    ~LayoutEditSession() {
+        view_->Release();
+        context_->Release();
+        service_->Release();
+    }
+    STDMETHODIMP QueryInterface(REFIID riid, void** object) override {
+        if (!object) return E_INVALIDARG;
+        *object = nullptr;
+        if (riid == IID_IUnknown || riid == IID_ITfEditSession) {
+            *object = static_cast<ITfEditSession*>(this);
+            AddRef();
+            return S_OK;
+        }
+        return E_NOINTERFACE;
+    }
+    STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&ref_count_); }
+    STDMETHODIMP_(ULONG) Release() override {
+        const ULONG count = InterlockedDecrement(&ref_count_);
+        if (!count) delete this;
+        return count;
+    }
+    STDMETHODIMP DoEditSession(TfEditCookie edit_cookie) override {
+        ITfRange* range = nullptr;
+        HRESULT hr = service_->composition() ? service_->composition()->GetRange(&range) : E_FAIL;
+        if (FAILED(hr)) {
+            TF_SELECTION selection{};
+            ULONG fetched = 0;
+            hr = context_->GetSelection(edit_cookie, TF_DEFAULT_SELECTION, 1, &selection, &fetched);
+            if (SUCCEEDED(hr) && fetched == 1) range = selection.range;
+        }
+        if (FAILED(hr) || !range) return hr;
+        if (service_->composition()) hr = range->Collapse(edit_cookie, TF_ANCHOR_START);
+        RECT rect{};
+        BOOL clipped = FALSE;
+        if (SUCCEEDED(hr)) hr = view_->GetTextExt(edit_cookie, range, &rect, &clipped);
+        range->Release();
+        if (SUCCEEDED(hr) && !clipped && rect.right >= rect.left && rect.bottom >= rect.top &&
+            (rect.right != 0 || rect.bottom != 0)) {
+            service_->UpdateCandidateAnchor(rect);
+        } else {
+            Trace("TextLayoutSink: GetTextExt unavailable; using caret fallback");
+        }
+        return hr;
+    }
+private:
+    LONG ref_count_ = 1;
+    HeshunTextService* service_ = nullptr;
+    ITfContext* context_ = nullptr;
+    ITfContextView* view_ = nullptr;
 };
 
 std::wstring Utf8ToUtf16(const char* value) {
@@ -599,6 +675,7 @@ void SavePinyinMode(bool pinyin_mode) {
 
 HeshunTextService::HeshunTextService() {
     pinyin_mode_ = LoadPinyinMode();
+    candidate_list_ = std::make_unique<HeshunCandidateList>(this);
     InterlockedIncrement(&g_object_count);
 }
 
@@ -622,6 +699,59 @@ HWND HeshunTextService::FocusedContextWindow() const {
     return window;
 }
 
+HRESULT HeshunTextService::FocusedDocumentManager(ITfDocumentMgr** manager) const {
+    if (!manager) return E_INVALIDARG;
+    *manager = nullptr;
+    return thread_mgr_ ? thread_mgr_->GetFocus(manager) : E_UNEXPECTED;
+}
+
+HRESULT HeshunTextService::QueryUIElementMgr(ITfUIElementMgr** manager) const {
+    if (!manager) return E_INVALIDARG;
+    *manager = nullptr;
+    return thread_mgr_ ? thread_mgr_->QueryInterface(IID_PPV_ARGS(manager)) : E_UNEXPECTED;
+}
+
+HRESULT HeshunTextService::CandidateString(size_t index, BSTR* string) const {
+    if (!string) return E_INVALIDARG;
+    *string = nullptr;
+    if (index >= candidates_.size()) return E_INVALIDARG;
+    const auto& candidate = candidates_[index];
+    std::wstring text = candidate.word;
+    if (!candidate.annotation.empty()) text += L"  [" + candidate.annotation + L"]";
+    *string = SysAllocStringLen(text.data(), static_cast<UINT>(text.size()));
+    return *string ? S_OK : E_OUTOFMEMORY;
+}
+
+size_t HeshunTextService::selected_candidate_index() const {
+    if (!has_selected_key_) return 0;
+    for (size_t i = 0; i < candidates_.size(); ++i) {
+        if (candidates_[i].key == selected_key_) return i;
+    }
+    return 0;
+}
+
+void HeshunTextService::SetCandidatePage(unsigned int page) {
+    if (DispatchRuntime(8, static_cast<long long>(page) - static_cast<long long>(page_index_))) UpdateCandidateWindow();
+}
+
+void HeshunTextService::HighlightCandidate(size_t index) {
+    if (index < candidates_.size()) {
+        const long long delta = static_cast<long long>(index) - static_cast<long long>(selected_candidate_index());
+        DispatchRuntime(7, delta);
+        UpdateCandidateWindow();
+    }
+}
+
+HRESULT HeshunTextService::FinalizeCandidate(size_t index) {
+    if (index >= candidates_.size() || !active_context_) return E_INVALIDARG;
+    SelectCandidate(active_context_, candidates_[index].key);
+    return S_OK;
+}
+
+HRESULT HeshunTextService::AbortCandidate() {
+    return active_context_ ? CancelComposition(active_context_) : S_OK;
+}
+
 HeshunTextService::~HeshunTextService() {
     Deactivate();
     InterlockedDecrement(&g_object_count);
@@ -636,6 +766,12 @@ STDMETHODIMP HeshunTextService::QueryInterface(REFIID riid, void** object) {
         *object = static_cast<ITfKeyEventSink*>(this);
     } else if (riid == IID_ITfThreadMgrEventSink) {
         *object = static_cast<ITfThreadMgrEventSink*>(this);
+    } else if (riid == IID_ITfTextEditSink) {
+        *object = static_cast<ITfTextEditSink*>(this);
+    } else if (riid == IID_ITfTextLayoutSink) {
+        *object = static_cast<ITfTextLayoutSink*>(this);
+    } else if (riid == IID_ITfThreadFocusSink) {
+        *object = static_cast<ITfThreadFocusSink*>(this);
     } else if (riid == IID_ITfActiveLanguageProfileNotifySink) {
         *object = static_cast<ITfActiveLanguageProfileNotifySink*>(this);
     } else if (riid == IID_ITfDisplayAttributeProvider) {
@@ -680,6 +816,15 @@ STDMETHODIMP HeshunTextService::ActivateEx(ITfThreadMgr* thread_mgr, TfClientId 
     }
     Trace("ActivateEx: thread manager event sink advise " + Hr(hr));
     if (FAILED(hr)) { Deactivate(); return hr; }
+
+    ITfDocumentMgr* focused_document_manager = nullptr;
+    if (SUCCEEDED(thread_mgr_->GetFocus(&focused_document_manager)) && focused_document_manager) {
+        const HRESULT edit_sink_hr = InitTextEditSink(focused_document_manager);
+        Trace("ActivateEx: text edit sink advise " + Hr(edit_sink_hr));
+        const HRESULT layout_sink_hr = InitTextLayoutSink(focused_document_manager);
+        Trace("ActivateEx: text layout sink advise " + Hr(layout_sink_hr));
+        focused_document_manager->Release();
+    }
 
     hr = E_FAIL;
     ITfCategoryMgr* categories = nullptr;
@@ -737,16 +882,26 @@ STDMETHODIMP HeshunTextService::ActivateEx(ITfThreadMgr* thread_mgr, TfClientId 
     if (SUCCEEDED(hr)) {
         const HRESULT profile_sink_hr = InitActiveLanguageProfileNotifySink();
         Trace("ActivateEx: active profile sink advise " + Hr(profile_sink_hr));
+        const HRESULT focus_sink_hr = InitThreadFocusSink();
+        Trace("ActivateEx: thread focus sink advise " + Hr(focus_sink_hr));
+        if (FAILED(focus_sink_hr)) hr = focus_sink_hr;
     }
     if (FAILED(hr)) { Trace("ActivateEx: activation setup failed"); Deactivate(); }
     else {
         SyncKeyboardCompartments();
+        const HRESULT compartment_hr = InitCompartmentSinks();
+        Trace("ActivateEx: compartment sinks advise " + Hr(compartment_hr));
+        if (FAILED(compartment_hr)) hr = compartment_hr;
         Trace("ActivateEx: key sink and language bar advised");
     }
     return hr;
 }
 
 STDMETHODIMP HeshunTextService::Deactivate() {
+    UninitCompartmentSinks();
+    UninitThreadFocusSink();
+    UninitTextEditSink();
+    UninitTextLayoutSink();
     if (thread_mgr_ && thread_mgr_event_sink_cookie_ != TF_INVALID_COOKIE) {
         ITfSource* source = nullptr;
         if (SUCCEEDED(thread_mgr_->QueryInterface(IID_PPV_ARGS(&source)))) {
@@ -805,6 +960,124 @@ void HeshunTextService::UninitActiveLanguageProfileNotifySink() {
         source->Release();
     }
     active_profile_sink_cookie_ = TF_INVALID_COOKIE;
+}
+
+HRESULT HeshunTextService::InitTextEditSink(ITfDocumentMgr* document_manager) {
+    UninitTextEditSink();
+    if (!document_manager) return S_OK;
+
+    ITfContext* context = nullptr;
+    HRESULT hr = document_manager->GetTop(&context);
+    if (FAILED(hr) || !context) {
+        Trace("TextEditSink: document manager has no top context " + Hr(FAILED(hr) ? hr : S_FALSE));
+        return SUCCEEDED(hr) ? S_OK : hr;
+    }
+
+    ITfSource* source = nullptr;
+    hr = context->QueryInterface(IID_PPV_ARGS(&source));
+    if (SUCCEEDED(hr)) {
+        hr = source->AdviseSink(IID_ITfTextEditSink,
+                                static_cast<ITfTextEditSink*>(this),
+                                &text_edit_sink_cookie_);
+        source->Release();
+    }
+    if (SUCCEEDED(hr)) {
+        text_edit_sink_context_ = context;
+        Trace("TextEditSink: advised");
+    } else {
+        text_edit_sink_cookie_ = TF_INVALID_COOKIE;
+        context->Release();
+        Trace("TextEditSink: advise failed " + Hr(hr));
+    }
+    return hr;
+}
+
+void HeshunTextService::UninitTextEditSink() {
+    if (text_edit_sink_context_ && text_edit_sink_cookie_ != TF_INVALID_COOKIE) {
+        ITfSource* source = nullptr;
+        if (SUCCEEDED(text_edit_sink_context_->QueryInterface(IID_PPV_ARGS(&source)))) {
+            const HRESULT hr = source->UnadviseSink(text_edit_sink_cookie_);
+            Trace("TextEditSink: unadvise " + Hr(hr));
+            source->Release();
+        }
+    }
+    text_edit_sink_cookie_ = TF_INVALID_COOKIE;
+    if (text_edit_sink_context_) {
+        text_edit_sink_context_->Release();
+        text_edit_sink_context_ = nullptr;
+    }
+}
+
+HRESULT HeshunTextService::InitTextLayoutSink(ITfDocumentMgr* document_manager) {
+    UninitTextLayoutSink();
+    if (!document_manager) return S_OK;
+    ITfContext* context = nullptr;
+    HRESULT hr = document_manager->GetTop(&context);
+    if (FAILED(hr) || !context) return SUCCEEDED(hr) ? S_OK : hr;
+    ITfSource* source = nullptr;
+    hr = context->QueryInterface(IID_PPV_ARGS(&source));
+    if (SUCCEEDED(hr)) {
+        hr = source->AdviseSink(IID_ITfTextLayoutSink,
+                                static_cast<ITfTextLayoutSink*>(this),
+                                &text_layout_sink_cookie_);
+        source->Release();
+    }
+    if (SUCCEEDED(hr)) {
+        text_layout_sink_context_ = context;
+        Trace("TextLayoutSink: advised");
+    } else {
+        text_layout_sink_cookie_ = TF_INVALID_COOKIE;
+        context->Release();
+    }
+    return hr;
+}
+
+void HeshunTextService::UninitTextLayoutSink() {
+    if (text_layout_sink_context_ && text_layout_sink_cookie_ != TF_INVALID_COOKIE) {
+        ITfSource* source = nullptr;
+        if (SUCCEEDED(text_layout_sink_context_->QueryInterface(IID_PPV_ARGS(&source)))) {
+            const HRESULT hr = source->UnadviseSink(text_layout_sink_cookie_);
+            Trace("TextLayoutSink: unadvise " + Hr(hr));
+            source->Release();
+        }
+    }
+    text_layout_sink_cookie_ = TF_INVALID_COOKIE;
+    if (text_layout_sink_context_) {
+        text_layout_sink_context_->Release();
+        text_layout_sink_context_ = nullptr;
+    }
+}
+
+HRESULT HeshunTextService::InitThreadFocusSink() {
+    if (!thread_mgr_) return E_UNEXPECTED;
+    if (thread_focus_sink_cookie_ != TF_INVALID_COOKIE) return S_FALSE;
+    ITfSource* source = nullptr;
+    HRESULT hr = thread_mgr_->QueryInterface(IID_PPV_ARGS(&source));
+    if (SUCCEEDED(hr)) {
+        hr = source->AdviseSink(IID_ITfThreadFocusSink,
+                                static_cast<ITfThreadFocusSink*>(this),
+                                &thread_focus_sink_cookie_);
+        source->Release();
+    }
+    if (FAILED(hr)) thread_focus_sink_cookie_ = TF_INVALID_COOKIE;
+    return hr;
+}
+
+void HeshunTextService::UninitThreadFocusSink() {
+    if (!thread_mgr_ || thread_focus_sink_cookie_ == TF_INVALID_COOKIE) return;
+    ITfSource* source = nullptr;
+    if (SUCCEEDED(thread_mgr_->QueryInterface(IID_PPV_ARGS(&source)))) {
+        const HRESULT hr = source->UnadviseSink(thread_focus_sink_cookie_);
+        Trace("ThreadFocusSink: unadvise " + Hr(hr));
+        source->Release();
+    }
+    thread_focus_sink_cookie_ = TF_INVALID_COOKIE;
+}
+
+void HeshunTextService::UpdateCandidateAnchor(const RECT& rect) {
+    if (!candidate_window_) return;
+    candidate_window_->SetAnchorRect(rect);
+    UpdateCandidateWindow();
 }
 
 void HeshunTextService::ShowLanguageBar(bool show) {
@@ -958,6 +1231,79 @@ void HeshunTextService::SyncKeyboardCompartments() {
     Trace(out.str());
 }
 
+bool HeshunTextService::ReadCompartmentDWORD(REFGUID guid, DWORD* value) const {
+    if (!thread_mgr_ || !value) return false;
+    *value = 0;
+    ITfCompartmentMgr* manager = nullptr;
+    ITfCompartment* compartment = nullptr;
+    VARIANT var;
+    VariantInit(&var);
+    HRESULT hr = thread_mgr_->QueryInterface(IID_PPV_ARGS(&manager));
+    if (SUCCEEDED(hr)) hr = manager->GetCompartment(guid, &compartment);
+    if (SUCCEEDED(hr)) hr = compartment->GetValue(&var);
+    const bool valid = SUCCEEDED(hr) && var.vt == VT_I4;
+    if (valid) *value = static_cast<DWORD>(var.lVal);
+    VariantClear(&var);
+    if (compartment) compartment->Release();
+    if (manager) manager->Release();
+    return valid;
+}
+
+HRESULT HeshunTextService::InitCompartmentSinks() {
+    UninitCompartmentSinks();
+    if (!thread_mgr_) return E_UNEXPECTED;
+    ITfCompartmentMgr* manager = nullptr;
+    HRESULT hr = thread_mgr_->QueryInterface(IID_PPV_ARGS(&manager));
+    if (FAILED(hr)) return hr;
+    const GUID guids[] = {GUID_COMPARTMENT_KEYBOARD_DISABLED,
+                          GUID_COMPARTMENT_EMPTYCONTEXT,
+                          GUID_COMPARTMENT_KEYBOARD_OPENCLOSE,
+                          GUID_COMPARTMENT_KEYBOARD_INPUTMODE_CONVERSION};
+    for (const GUID& guid : guids) {
+        ITfCompartment* compartment = nullptr;
+        hr = manager->GetCompartment(guid, &compartment);
+        if (SUCCEEDED(hr)) {
+            auto sink = std::make_unique<HeshunCompartmentSink>(
+                [this](REFGUID changed) { OnCompartmentChanged(changed); });
+            hr = sink->Advise(compartment);
+            compartment->Release();
+            if (SUCCEEDED(hr)) compartment_sinks_.push_back(std::move(sink));
+        }
+        if (FAILED(hr)) break;
+    }
+    manager->Release();
+    if (FAILED(hr)) UninitCompartmentSinks();
+    return hr;
+}
+
+void HeshunTextService::UninitCompartmentSinks() {
+    compartment_sinks_.clear();
+}
+
+void HeshunTextService::OnCompartmentChanged(REFGUID guid) {
+    DWORD value = 0;
+    if (guid == GUID_COMPARTMENT_KEYBOARD_DISABLED && ReadCompartmentDWORD(guid, &value)) {
+        keyboard_disabled_ = value != 0;
+        if (keyboard_disabled_) ClearActiveContext("KeyboardDisabled");
+    } else if (guid == GUID_COMPARTMENT_EMPTYCONTEXT && ReadCompartmentDWORD(guid, &value)) {
+        empty_context_ = value != 0;
+        if (empty_context_) ClearActiveContext("EmptyContext");
+    } else if (guid == GUID_COMPARTMENT_KEYBOARD_OPENCLOSE && ReadCompartmentDWORD(guid, &value)) {
+        keyboard_open_ = value != 0;
+        if (!keyboard_open_) ClearActiveContext("KeyboardClosed");
+        ShowLanguageBar(keyboard_open_);
+    } else if (guid == GUID_COMPARTMENT_KEYBOARD_INPUTMODE_CONVERSION && ReadCompartmentDWORD(guid, &value)) {
+        conversion_mode_ = value;
+        const bool external_ascii = (value & TF_CONVERSIONMODE_ALPHANUMERIC) != 0;
+        if (ascii_mode_ != external_ascii) {
+            ascii_mode_ = external_ascii;
+            if (runtime_) DispatchRuntime(9);
+            if (langbar_status_) langbar_status_->NotifyUpdate();
+        }
+    }
+    Trace("Compartment: external change");
+}
+
 void HeshunTextService::SaveUserDictionary() {
     if (!runtime_) return;
     const std::string directory = ModuleDirectory();
@@ -1050,6 +1396,7 @@ HRESULT HeshunTextService::CancelComposition(ITfContext* context) {
 
 void HeshunTextService::UpdateCandidateWindow() {
     if (!runtime_ || pending_.empty()) {
+        if (candidate_list_) candidate_list_->End();
         if (candidate_window_) candidate_window_->Hide();
         Trace("CandidateWindow: hidden");
         return;
@@ -1069,6 +1416,9 @@ void HeshunTextService::UpdateCandidateWindow() {
         });
     }
     candidate_window_->Show(pending_, std::move(candidates), std::move(keys), page_index_, page_size_, total_candidates_, cursor_);
+    if (candidate_list_) {
+        if (SUCCEEDED(candidate_list_->Begin())) candidate_list_->Update();
+    }
     Trace("CandidateWindow: shown");
 }
 
@@ -1202,6 +1552,19 @@ STDMETHODIMP HeshunTextService::OnSetFocus(BOOL foreground) {
     return S_OK;
 }
 
+STDMETHODIMP HeshunTextService::OnSetThreadFocus() {
+    RefreshPersistentInputMode();
+    if (active_context_ && composition_) UpdateCandidateWindow();
+    Trace("ThreadFocusSink: thread focus set");
+    return S_OK;
+}
+
+STDMETHODIMP HeshunTextService::OnKillThreadFocus() {
+    ClearActiveContext("ThreadFocusLost");
+    Trace("ThreadFocusSink: thread focus killed");
+    return S_OK;
+}
+
 STDMETHODIMP HeshunTextService::OnInitDocumentMgr(ITfDocumentMgr*) {
     return S_OK;
 }
@@ -1218,6 +1581,10 @@ STDMETHODIMP HeshunTextService::OnUninitDocumentMgr(ITfDocumentMgr* document_man
 
 STDMETHODIMP HeshunTextService::OnSetFocus(ITfDocumentMgr* focused_document_manager,
                                            ITfDocumentMgr*) {
+    const HRESULT edit_sink_hr = InitTextEditSink(focused_document_manager);
+    Trace("TextEditSink: focus context update " + Hr(edit_sink_hr));
+    const HRESULT layout_sink_hr = InitTextLayoutSink(focused_document_manager);
+    Trace("TextLayoutSink: focus context update " + Hr(layout_sink_hr));
     ITfContext* focused_context = nullptr;
     if (focused_document_manager) focused_document_manager->GetTop(&focused_context);
     if (focused_context != active_context_) ClearActiveContext("DocumentFocusChanged");
@@ -1234,6 +1601,66 @@ STDMETHODIMP HeshunTextService::OnPopContext(ITfContext* context) {
     if (context == active_context_) ClearActiveContext("ContextPopped");
     return S_OK;
 }
+
+STDMETHODIMP HeshunTextService::OnEndEdit(ITfContext* context,
+                                          TfEditCookie edit_cookie,
+                                          ITfEditRecord* edit_record) {
+    if (!context || !edit_record) return E_INVALIDARG;
+    if (context != text_edit_sink_context_) return S_OK;
+
+    BOOL selection_changed = FALSE;
+    if (SUCCEEDED(edit_record->GetSelectionStatus(&selection_changed)) && selection_changed && composition_) {
+        TF_SELECTION selection{};
+        ULONG fetched = 0;
+        if (SUCCEEDED(context->GetSelection(edit_cookie, TF_DEFAULT_SELECTION, 1,
+                                            &selection, &fetched)) &&
+            fetched == 1 && selection.range) {
+            ITfRange* composition_range = nullptr;
+            if (SUCCEEDED(composition_->GetRange(&composition_range)) && composition_range) {
+                if (!IsRangeCovered(edit_cookie, selection.range, composition_range)) {
+                    Trace("TextEditSink: selection left composition; cancelling");
+                    const HRESULT cancel_hr = CancelComposition(context);
+                    Trace(FAILED(cancel_hr) ? "TextEditSink: cancel failed " + Hr(cancel_hr)
+                                            : "TextEditSink: composition cancelled");
+                }
+                composition_range->Release();
+            }
+            selection.range->Release();
+        }
+    }
+
+    IEnumTfRanges* ranges = nullptr;
+    if (SUCCEEDED(edit_record->GetTextAndPropertyUpdates(TF_GTP_INCL_TEXT, nullptr, 0, &ranges)) && ranges) {
+        ULONG fetched = 0;
+        unsigned int range_count = 0;
+        ITfRange* range = nullptr;
+        while (ranges->Next(1, &range, &fetched) == S_OK && fetched == 1) {
+            ++range_count;
+            range->Release();
+            range = nullptr;
+        }
+        ranges->Release();
+        Trace("TextEditSink: text change ranges observed=" + std::to_string(range_count));
+    }
+    return S_OK;
+}
+
+STDMETHODIMP HeshunTextService::OnLayoutChange(ITfContext* context,
+                                                TfLayoutCode layout_code,
+                                                ITfContextView* context_view) {
+    if (!context || !context_view || context != text_layout_sink_context_ || !composition_) return S_OK;
+    if (layout_code != TF_LC_CHANGE) return S_OK;
+    auto* edit = new (std::nothrow) LayoutEditSession(this, context, context_view);
+    if (!edit) return E_OUTOFMEMORY;
+    HRESULT session_hr = E_FAIL;
+    const HRESULT request_hr = context->RequestEditSession(client_id_, edit,
+                                                            TF_ES_ASYNCDONTCARE | TF_ES_READ,
+                                                            &session_hr);
+    edit->Release();
+    Trace("TextLayoutSink: position request " + Hr(FAILED(request_hr) ? request_hr : session_hr));
+    return SUCCEEDED(request_hr) ? S_OK : request_hr;
+}
+
 STDMETHODIMP HeshunTextService::OnTestKeyDown(ITfContext* context, WPARAM wparam, LPARAM lparam, BOOL* eaten) {
     if (!eaten) return E_INVALIDARG;
     test_key_up_pending_ = false;

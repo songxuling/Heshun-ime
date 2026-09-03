@@ -10,6 +10,8 @@ add_library(heshun_tsf SHARED
   src/dllmain.cpp
   src/class_factory.cpp
   src/text_service.cpp
+  src/compartment_sink.cpp
+  src/candidate_list.cpp
   src/candidate_window.cpp
   src/heshun_icon.rc
   src/heshun_tsf.def
@@ -53,12 +55,18 @@ endif()
 add_executable(heshun_tsf_profile src/profile_tool.cpp)
 add_executable(heshun_tsf_activation_probe tests/com_activation_probe.cpp)
 add_executable(heshun_tsf_abi_header_contract tests/abi_header_contract.cpp)
+add_executable(heshun_tsf_tsf_interface_contract tests/tsf_interface_contract.cpp)
 target_compile_definitions(heshun_tsf_profile PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_definitions(heshun_tsf_activation_probe PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_definitions(heshun_tsf_abi_header_contract PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_definitions(heshun_tsf_tsf_interface_contract PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_include_directories(heshun_tsf_profile PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_include_directories(heshun_tsf_activation_probe PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_include_directories(heshun_tsf_abi_header_contract PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/../heshun/include
+)
+target_include_directories(heshun_tsf_tsf_interface_contract PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${CMAKE_CURRENT_SOURCE_DIR}/../heshun/include
 )
@@ -73,6 +81,9 @@ set_target_properties(heshun_tsf_profile PROPERTIES
 set_target_properties(heshun_tsf_abi_header_contract PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
+set_target_properties(heshun_tsf_tsf_interface_contract PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
 
 enable_testing()
 add_test(NAME tsf_binary_exports
@@ -81,4 +92,7 @@ add_test(NAME tsf_binary_exports
 )
 add_test(NAME tsf_abi_header_contract
   COMMAND "$<TARGET_FILE:heshun_tsf_abi_header_contract>"
+)
+add_test(NAME tsf_tsf_interface_contract
+  COMMAND "$<TARGET_FILE:heshun_tsf_tsf_interface_contract>"
 )

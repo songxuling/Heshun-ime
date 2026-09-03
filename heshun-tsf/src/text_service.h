@@ -7,6 +7,8 @@
 #include "heshun.h"
 #include "candidate_window.h"
 #include "display_attributes.h"
+#include "compartment_sink.h"
+#include "candidate_list.h"
 
 struct IHeshunLangBarStatus {
     virtual void NotifyUpdate(DWORD flags = TF_LBI_TEXT | TF_LBI_ICON | TF_LBI_STATUS) = 0;
@@ -15,6 +17,9 @@ struct IHeshunLangBarStatus {
 class HeshunTextService final : public ITfTextInputProcessorEx,
                                 public ITfKeyEventSink,
                                 public ITfThreadMgrEventSink,
+                                public ITfTextEditSink,
+                                public ITfTextLayoutSink,
+                                public ITfThreadFocusSink,
                                 public ITfActiveLanguageProfileNotifySink,
                                 public ITfDisplayAttributeProvider,
                                 public ITfCompositionSink {
@@ -54,6 +59,20 @@ public:
     STDMETHODIMP OnPushContext(ITfContext* context) override;
     STDMETHODIMP OnPopContext(ITfContext* context) override;
 
+    // ITfTextEditSink
+    STDMETHODIMP OnEndEdit(ITfContext* context,
+                           TfEditCookie edit_cookie,
+                           ITfEditRecord* edit_record) override;
+
+    // ITfTextLayoutSink
+    STDMETHODIMP OnLayoutChange(ITfContext* context,
+                                TfLayoutCode layout_code,
+                                ITfContextView* context_view) override;
+
+    // ITfThreadFocusSink
+    STDMETHODIMP OnSetThreadFocus() override;
+    STDMETHODIMP OnKillThreadFocus() override;
+
     // ITfActiveLanguageProfileNotifySink
     STDMETHODIMP OnActivated(REFCLSID clsid, REFGUID profile, BOOL activated) override;
 
@@ -71,8 +90,23 @@ public:
     void SetComposition(ITfComposition* composition);
     void ClearComposition();
     void QueueCompositionUpdate(ITfContext* context);
+    void UpdateCandidateAnchor(const RECT& rect);
+    void OnCompartmentChanged(REFGUID guid);
+    HRESULT FocusedDocumentManager(ITfDocumentMgr** manager) const;
+    size_t candidate_count() const { return candidates_.size(); }
+    unsigned int candidate_page() const { return page_index_; }
+    unsigned int candidate_page_count() const { return page_size_ ? (total_candidates_ + page_size_ - 1) / page_size_ : 0; }
+    size_t selected_candidate_index() const;
+    unsigned int composition_cursor() const { return cursor_; }
+    HRESULT CandidateString(size_t index, BSTR* string) const;
+    void SetCandidatePage(unsigned int page);
+    void HighlightCandidate(size_t index);
+    HRESULT FinalizeCandidate(size_t index);
+    HRESULT AbortCandidate();
+    HRESULT QueryUIElementMgr(ITfUIElementMgr** manager) const;
 
 private:
+    friend class HeshunCandidateList;
     ~HeshunTextService();
 
     bool LoadEngine();
@@ -100,6 +134,15 @@ private:
     void SyncKeyboardCompartments();
     HRESULT InitActiveLanguageProfileNotifySink();
     void UninitActiveLanguageProfileNotifySink();
+    HRESULT InitTextEditSink(ITfDocumentMgr* document_manager);
+    void UninitTextEditSink();
+    HRESULT InitTextLayoutSink(ITfDocumentMgr* document_manager);
+    void UninitTextLayoutSink();
+    HRESULT InitThreadFocusSink();
+    void UninitThreadFocusSink();
+    HRESULT InitCompartmentSinks();
+    void UninitCompartmentSinks();
+    bool ReadCompartmentDWORD(REFGUID guid, DWORD* value) const;
     void ShowLanguageBar(bool show);
     void ClearActiveContext(const char* reason);
 
@@ -109,6 +152,10 @@ private:
     DWORD key_sink_cookie_ = TF_INVALID_COOKIE;
     DWORD thread_mgr_event_sink_cookie_ = TF_INVALID_COOKIE;
     DWORD active_profile_sink_cookie_ = TF_INVALID_COOKIE;
+    DWORD text_edit_sink_cookie_ = TF_INVALID_COOKIE;
+    DWORD text_layout_sink_cookie_ = TF_INVALID_COOKIE;
+    DWORD thread_focus_sink_cookie_ = TF_INVALID_COOKIE;
+    std::vector<std::unique_ptr<class HeshunCompartmentSink>> compartment_sinks_;
     hs_handle* runtime_ = nullptr;
     ITfComposition* composition_ = nullptr;
     bool composition_end_in_progress_ = false;
@@ -116,8 +163,15 @@ private:
     ITfLangBarItem* langbar_item_ = nullptr;
     IHeshunLangBarStatus* langbar_status_ = nullptr;
     std::unique_ptr<CandidateWindow> candidate_window_;
+    std::unique_ptr<HeshunCandidateList> candidate_list_;
     ITfContext* active_context_ = nullptr;
+    ITfContext* text_edit_sink_context_ = nullptr;
+    ITfContext* text_layout_sink_context_ = nullptr;
     bool ascii_mode_ = false;
+    bool keyboard_disabled_ = false;
+    bool empty_context_ = false;
+    bool keyboard_open_ = true;
+    DWORD conversion_mode_ = TF_CONVERSIONMODE_NATIVE;
     bool pinyin_mode_ = false;
     bool shift_down_ = false;
     bool shift_used_with_other_key_ = false;

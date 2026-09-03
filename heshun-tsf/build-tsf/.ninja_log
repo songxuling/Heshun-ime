@@ -1,0 +1,18 @@
+# ninja log v7
+50	234	8101012223139298	CMakeFiles/heshun_tsf.dir/src/heshun_icon.rc.res	b5842efb6ca33fb7
+119	528	8101012223833094	CMakeFiles/heshun_tsf_abi_header_contract.dir/tests/abi_header_contract.cpp.obj	fe0b3b3d9c8d5cf0
+529	723	8101012227935217	bin/heshun_tsf_abi_header_contract.exe	9b715b9223ae1fa1
+26	1301	8101012222896041	CMakeFiles/heshun_tsf.dir/src/dllmain.cpp.obj	7bed7c9f4372a1d3
+18	1053	8101026083473314	CMakeFiles/heshun_tsf.dir/src/class_factory.cpp.obj	d08796dcf2549690
+21	807	8101026777345590	CMakeFiles/heshun_tsf.dir/src/candidate_window.cpp.obj	209cb260d033cf33
+114	2873	8101012223783463	CMakeFiles/heshun_tsf_activation_probe.dir/tests/com_activation_probe.cpp.obj	ee3d2b1cc22d6512
+108	2885	8101012223725451	CMakeFiles/heshun_tsf_profile.dir/src/profile_tool.cpp.obj	650a8e94abea141b
+16	1638	8101026777285438	CMakeFiles/heshun_tsf.dir/src/text_service.cpp.obj	c1d51a673587f2a2
+49	245	8101012550101911	bin/heshun_tsf_profile.exe	b3e9879677da8d8
+62	248	8101012550231619	bin/heshun_tsf_activation_probe.exe	ffd014f64f610bbc
+1638	2045	8101026793509164	bin/heshun_tsf.dll	480ddb9de3ff7819
+1638	2045	8101026793509164	heshun_tsf.lib	480ddb9de3ff7819
+35	981	8101026083643619	CMakeFiles/heshun_tsf_tsf_interface_contract.dir/tests/tsf_interface_contract.cpp.obj	de882b53cc88db7c
+982	1113	8101026093113055	bin/heshun_tsf_tsf_interface_contract.exe	f463eeecc983a8f2
+47	924	8101020487410471	CMakeFiles/heshun_tsf.dir/src/compartment_sink.cpp.obj	4fcf414f224370c
+29	1017	8101026083586158	CMakeFiles/heshun_tsf.dir/src/candidate_list.cpp.obj	2cf501dae77666a7

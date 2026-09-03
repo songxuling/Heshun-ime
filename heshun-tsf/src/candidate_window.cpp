@@ -85,11 +85,16 @@ void CandidateWindow::Show(std::wstring pending, std::vector<std::wstring> candi
     HWND foreground = GetForegroundWindow();
     POINT anchor{};
     HWND anchor_window = nullptr;
-    const bool has_caret = foreground &&
+    bool has_caret = false;
+    if (has_anchor_rect_) {
+        anchor = POINT{anchor_rect_.left, anchor_rect_.bottom};
+        has_caret = true;
+    }
+    if (!has_caret) has_caret = foreground &&
         GetGUIThreadInfo(GetWindowThreadProcessId(foreground, nullptr), &info) &&
         info.hwndCaret && info.rcCaret.right >= info.rcCaret.left &&
         info.rcCaret.bottom >= info.rcCaret.top;
-    if (has_caret) {
+    if (has_caret && !has_anchor_rect_) {
         anchor = POINT{info.rcCaret.left, info.rcCaret.bottom};
         anchor_window = info.hwndCaret;
         if (!ClientToScreen(anchor_window, &anchor)) anchor_window = nullptr;
@@ -159,6 +164,12 @@ void CandidateWindow::Hide() {
     selected_index_ = 0;
     keyboard_selection_ = false;
     caret_visible_ = true;
+    has_anchor_rect_ = false;
+}
+
+void CandidateWindow::SetAnchorRect(const RECT& rect) {
+    anchor_rect_ = rect;
+    has_anchor_rect_ = rect.right >= rect.left && rect.bottom >= rect.top;
 }
 
 size_t CandidateWindow::RowAtY(int y) const {
