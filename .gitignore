@@ -1,6 +1,7 @@
 # CMake / Ninja build output (never version generated trees)
 /build-tsf*/
 /heshun-tsf/build-tsf/
+/heshun-tsf/build-tsf*/
 /heshun-tsf/build/
 /heshun-tsf/dist/
 **/CMakeFiles/

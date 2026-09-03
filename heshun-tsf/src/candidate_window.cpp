@@ -5,8 +5,21 @@
 #include <cmath>
 #include <mutex>
 #include <filesystem>
+#include <fstream>
+
+extern HINSTANCE g_module_instance;
 
 namespace {
+void CandidateTrace(const std::string& message) {
+    wchar_t module_path[MAX_PATH]{};
+    const DWORD length = GetModuleFileNameW(g_module_instance, module_path, ARRAYSIZE(module_path));
+    if (!length || length >= ARRAYSIZE(module_path)) return;
+    std::filesystem::path log_path(module_path, module_path + length);
+    log_path = log_path.parent_path() / L"heshun-tsf.log";
+    std::ofstream log(log_path, std::ios::app);
+    if (log) log << message << '\\n';
+}
+
 constexpr wchar_t kClassName[] = L"HeshunTsfCandidateWindow";
 constexpr COLORREF kBackground = RGB(255, 255, 255);
 constexpr COLORREF kBorder = RGB(190, 190, 190);
@@ -95,26 +108,30 @@ void CandidateWindow::Show(std::wstring pending, std::vector<std::wstring> candi
     HWND foreground = GetForegroundWindow();
     POINT anchor{};
     HWND anchor_window = nullptr;
-    bool has_caret = false;
-    if (has_anchor_rect_) {
-        anchor = POINT{anchor_rect_.left, anchor_rect_.bottom};
-        has_caret = true;
-    }
-    if (!has_caret) has_caret = foreground &&
-        GetGUIThreadInfo(GetWindowThreadProcessId(foreground, nullptr), &info) &&
-        info.hwndCaret && info.rcCaret.right >= info.rcCaret.left &&
-        info.rcCaret.bottom >= info.rcCaret.top;
-    if (has_caret && !has_anchor_rect_) {
-        anchor = POINT{info.rcCaret.left, info.rcCaret.bottom};
-        anchor_window = info.hwndCaret;
-        if (!ClientToScreen(anchor_window, &anchor)) anchor_window = nullptr;
-    }
-    if (!anchor_window) {
-        anchor = POINT{foreground ? 0 : 24, foreground ? 0 : 24};
-        anchor_window = foreground;
-        if (anchor_window) {
-            ClientToScreen(anchor_window, &anchor);
+    const bool has_tsf_anchor = has_anchor_rect_;
+    const POINT tsf_anchor{anchor_rect_.left, anchor_rect_.bottom};
+    bool has_gui_caret = false;
+    if (!has_tsf_anchor) {
+        has_gui_caret = foreground &&
+            GetGUIThreadInfo(GetWindowThreadProcessId(foreground, nullptr), &info) &&
+            info.hwndCaret && info.rcCaret.right >= info.rcCaret.left &&
+            info.rcCaret.bottom >= info.rcCaret.top;
+        if (has_gui_caret) {
+            anchor = POINT{info.rcCaret.left, info.rcCaret.bottom};
+            anchor_window = info.hwndCaret;
+            if (!ClientToScreen(anchor_window, &anchor)) {
+                anchor_window = nullptr;
+                has_gui_caret = false;
+            }
         }
+    }
+    const POINT fallback_anchor{foreground ? 0 : 24, foreground ? 0 : 24};
+    anchor = ResolveCandidateAnchorPoint(has_tsf_anchor, tsf_anchor,
+                                         has_gui_caret, anchor, fallback_anchor);
+    const bool has_caret = has_tsf_anchor || has_gui_caret;
+    if (!has_tsf_anchor && !anchor_window) {
+        anchor_window = foreground;
+        if (anchor_window) ClientToScreen(anchor_window, &anchor);
     }
 
     const int dpi = DpiForWindow(anchor_window ? anchor_window : window_);
@@ -137,6 +154,10 @@ void CandidateWindow::Show(std::wstring pending, std::vector<std::wstring> candi
     const int x = std::clamp(anchor.x, work.left, std::max(work.left, work.right - width));
     const int y = std::clamp(anchor.y + (has_caret ? 4 : 0),
                              work.top, std::max(work.top, work.bottom - height));
+    CandidateTrace("CandidateWindow: anchor=" + std::to_string(anchor.x) + "," +
+                   std::to_string(anchor.y) + " tsf=" + std::to_string(has_tsf_anchor) +
+                   " gui=" + std::to_string(has_gui_caret) + " final=" + std::to_string(x) +
+                   "," + std::to_string(y));
     SetWindowPos(window_, HWND_TOPMOST, x, y, width, height,
                  SWP_NOACTIVATE | SWP_SHOWWINDOW);
     InvalidateRect(window_, nullptr, TRUE);

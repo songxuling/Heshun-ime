@@ -30,6 +30,12 @@ struct CandidateWindowStyle {
     std::wstring font_family = L"Microsoft YaHei";
 };
 
+inline POINT ResolveCandidateAnchorPoint(bool has_tsf_anchor, POINT tsf_anchor,
+                                         bool has_gui_caret, POINT gui_caret,
+                                         POINT fallback_anchor) {
+    return has_tsf_anchor ? tsf_anchor : (has_gui_caret ? gui_caret : fallback_anchor);
+}
+
 class CandidateWindow final {
 public:
     CandidateWindow() = default;

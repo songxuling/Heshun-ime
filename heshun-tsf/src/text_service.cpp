@@ -529,6 +529,10 @@ public:
         BOOL clipped = FALSE;
         if (SUCCEEDED(hr)) hr = view_->GetTextExt(edit_cookie, range, &rect, &clipped);
         range->Release();
+        Trace("TextLayoutSink: GetTextExt hr=" + Hr(hr) +
+              " clipped=" + std::to_string(clipped) +
+              " rect=" + std::to_string(rect.left) + "," + std::to_string(rect.top) +
+              "," + std::to_string(rect.right) + "," + std::to_string(rect.bottom));
         if (SUCCEEDED(hr) && !clipped && rect.right >= rect.left && rect.bottom >= rect.top &&
             (rect.right != 0 || rect.bottom != 0)) {
             service_->UpdateCandidateAnchor(rect);
@@ -1088,6 +1092,9 @@ void HeshunTextService::UninitThreadFocusSink() {
 
 void HeshunTextService::UpdateCandidateAnchor(const RECT& rect) {
     if (!candidate_window_) return;
+    Trace("CandidateAnchor: accepted TSF rect=" + std::to_string(rect.left) + "," +
+          std::to_string(rect.top) + "," + std::to_string(rect.right) + "," +
+          std::to_string(rect.bottom));
     candidate_window_->SetAnchorRect(rect);
     UpdateCandidateWindow();
 }
