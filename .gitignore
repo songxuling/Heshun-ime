@@ -1,15 +1,31 @@
-# CMake build output
+# CMake / Ninja build output (never version generated trees)
 /build-tsf*/
+/heshun-tsf/build-tsf/
+/heshun-tsf/build/
 /heshun-tsf/dist/
+**/CMakeFiles/
+**/Testing/Temporary/
+CMakeCache.txt
+cmake_install.cmake
+build.ninja
+.ninja_deps
+.ninja_log
+*.obj
+*.pdb
+*.exp
+*.ilk
+*.rc.res
 
 # Rust build output
 /target/
 **/target/
 
-# GUI runtime/generated data
+# Runtime-generated local state and logs
 /data/
 /dist/
 **/*.userdb.json
+*.log
+heshun-tsf.log
 
 # Local IDE / OS files
 /.idea/
@@ -26,8 +42,9 @@ Desktop.ini
 *.a
 *.exe
 
-# Source-controlled binary dictionaries are intentionally exempt.
+# Source-controlled binary dictionaries and the shipped default UI config.
 !heshun/schemas/*.bin
+!heshun-tsf/assets/heshun-ui.ini
 
 # Local-only development notes and verification artifacts
 /docs-dev/

@@ -1,49 +1,64 @@
-Start testing: Sep 03 09:40 中国标准时间
+Start testing: Sep 03 22:39 中国标准时间
 ----------------------------------------------------------
-1/3 Testing: tsf_binary_exports
-1/3 Test: tsf_binary_exports
+1/4 Testing: tsf_binary_exports
+1/4 Test: tsf_binary_exports
 Command: "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe" "-NoProfile" "-ExecutionPolicy" "Bypass" "-File" "D:/Proj/Heshun-ime/heshun-tsf/tests/verify_exports.ps1" "D:/Proj/Heshun-ime/heshun-tsf/build-tsf/bin/heshun_tsf.dll"
 Directory: D:/Proj/Heshun-ime/heshun-tsf/build-tsf
-"tsf_binary_exports" start time: Sep 03 09:40 中国标准时间
+"tsf_binary_exports" start time: Sep 03 22:39 中国标准时间
 Output:
 ----------------------------------------------------------
 TSF COM exports: OK
 <end of output>
-Test time =   0.35 sec
+Test time =   0.37 sec
 ----------------------------------------------------------
 Test Passed.
-"tsf_binary_exports" end time: Sep 03 09:40 中国标准时间
+"tsf_binary_exports" end time: Sep 03 22:39 中国标准时间
 "tsf_binary_exports" time elapsed: 00:00:00
 ----------------------------------------------------------
 
-2/3 Testing: tsf_abi_header_contract
-2/3 Test: tsf_abi_header_contract
+2/4 Testing: tsf_abi_header_contract
+2/4 Test: tsf_abi_header_contract
 Command: "D:/Proj/Heshun-ime/heshun-tsf/build-tsf/bin/heshun_tsf_abi_header_contract.exe"
 Directory: D:/Proj/Heshun-ime/heshun-tsf/build-tsf
-"tsf_abi_header_contract" start time: Sep 03 09:40 中国标准时间
+"tsf_abi_header_contract" start time: Sep 03 22:39 中国标准时间
 Output:
 ----------------------------------------------------------
 <end of output>
 Test time =   0.01 sec
 ----------------------------------------------------------
 Test Passed.
-"tsf_abi_header_contract" end time: Sep 03 09:40 中国标准时间
+"tsf_abi_header_contract" end time: Sep 03 22:39 中国标准时间
 "tsf_abi_header_contract" time elapsed: 00:00:00
 ----------------------------------------------------------
 
-3/3 Testing: tsf_tsf_interface_contract
-3/3 Test: tsf_tsf_interface_contract
-Command: "D:/Proj/Heshun-ime/heshun-tsf/build-tsf/bin/heshun_tsf_tsf_interface_contract.exe"
+3/4 Testing: tsf_key_event_contract
+3/4 Test: tsf_key_event_contract
+Command: "D:/Proj/Heshun-ime/heshun-tsf/build-tsf/bin/heshun_tsf_key_event_contract.exe"
 Directory: D:/Proj/Heshun-ime/heshun-tsf/build-tsf
-"tsf_tsf_interface_contract" start time: Sep 03 09:40 中国标准时间
+"tsf_key_event_contract" start time: Sep 03 22:39 中国标准时间
 Output:
 ----------------------------------------------------------
 <end of output>
 Test time =   0.01 sec
 ----------------------------------------------------------
 Test Passed.
-"tsf_tsf_interface_contract" end time: Sep 03 09:40 中国标准时间
+"tsf_key_event_contract" end time: Sep 03 22:39 中国标准时间
+"tsf_key_event_contract" time elapsed: 00:00:00
+----------------------------------------------------------
+
+4/4 Testing: tsf_tsf_interface_contract
+4/4 Test: tsf_tsf_interface_contract
+Command: "D:/Proj/Heshun-ime/heshun-tsf/build-tsf/bin/heshun_tsf_tsf_interface_contract.exe"
+Directory: D:/Proj/Heshun-ime/heshun-tsf/build-tsf
+"tsf_tsf_interface_contract" start time: Sep 03 22:39 中国标准时间
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"tsf_tsf_interface_contract" end time: Sep 03 22:39 中国标准时间
 "tsf_tsf_interface_contract" time elapsed: 00:00:00
 ----------------------------------------------------------
 
-End testing: Sep 03 09:40 中国标准时间
+End testing: Sep 03 22:39 中国标准时间

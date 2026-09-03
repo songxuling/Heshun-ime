@@ -118,6 +118,24 @@ rule CXX_EXECUTABLE_LINKER__heshun_tsf_tsf_interface_contract_Release
 
 
 #############################################
+# Rule for compiling CXX files.
+
+rule CXX_COMPILER__heshun_tsf_key_event_contract_unscanned_Release
+  deps = msvc
+  command = ${LAUNCHER}${CODE_CHECK}C:\Users\sxl\tools\VSBuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\cl.exe  /nologo /TP $DEFINES $INCLUDES $FLAGS /showIncludes /Fo$out /Fd$TARGET_COMPILE_PDB /FS -c $in
+  description = Building CXX object $out
+
+
+#############################################
+# Rule for linking CXX executable.
+
+rule CXX_EXECUTABLE_LINKER__heshun_tsf_key_event_contract_Release
+  command = C:\Windows\system32\cmd.exe /C "$PRE_LINK && C:\Users\sxl\AppData\Roaming\uv\tools\cmake\Lib\site-packages\cmake\data\bin\cmake.exe -E vs_link_exe --msvc-ver=1944 --intdir=$OBJECT_DIR --rc="C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\rc.exe" --mt="C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\mt.exe" --manifests $MANIFESTS -- C:\Users\sxl\tools\VSBuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe /nologo $in  /out:$TARGET_FILE /implib:$TARGET_IMPLIB /pdb:$TARGET_PDB /version:0.0 $LINK_FLAGS $LINK_PATH $LINK_LIBRARIES && $POST_BUILD"
+  description = Linking CXX executable $TARGET_FILE
+  restat = $RESTAT
+
+
+#############################################
 # Rule for running custom commands.
 
 rule CUSTOM_COMMAND

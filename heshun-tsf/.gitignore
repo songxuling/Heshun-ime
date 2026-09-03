@@ -1,2 +1,6 @@
-# Heshun TSF deployment artifacts are generated outside the source tree.
+# This subproject is normally built from the repository root into build-tsf.
 /build/
+/build-tsf/
+/dist/
+*.log
+*.userdb.json

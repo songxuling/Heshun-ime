@@ -104,6 +104,17 @@ build CMakeFiles\heshun_tsf.dir\src\candidate_list.cpp.obj: CXX_COMPILER__heshun
   TARGET_PDB = bin\heshun_tsf.pdb
   TARGET_SUPPORT_DIR = CMakeFiles\heshun_tsf.dir
 
+build CMakeFiles\heshun_tsf.dir\src\key_event.cpp.obj: CXX_COMPILER__heshun_tsf_unscanned_Release D$:\Proj\Heshun-ime\heshun-tsf\src\key_event.cpp || cmake_object_order_depends_target_heshun_tsf
+  CONFIG = Release
+  DEFINES = -DNOMINMAX -DUNICODE -DWIN32_LEAN_AND_MEAN -D_UNICODE -Dheshun_tsf_EXPORTS
+  FLAGS = -std:c++17 -MD /utf-8
+  INCLUDES = -ID:\Proj\Heshun-ime\heshun-tsf\src -ID:\Proj\Heshun-ime\heshun-tsf\..\heshun\include
+  OBJECT_DIR = CMakeFiles\heshun_tsf.dir
+  OBJECT_FILE_DIR = CMakeFiles\heshun_tsf.dir\src
+  TARGET_COMPILE_PDB = CMakeFiles\heshun_tsf.dir\
+  TARGET_PDB = bin\heshun_tsf.pdb
+  TARGET_SUPPORT_DIR = CMakeFiles\heshun_tsf.dir
+
 build CMakeFiles\heshun_tsf.dir\src\candidate_window.cpp.obj: CXX_COMPILER__heshun_tsf_unscanned_Release D$:\Proj\Heshun-ime\heshun-tsf\src\candidate_window.cpp || cmake_object_order_depends_target_heshun_tsf
   CONFIG = Release
   DEFINES = -DNOMINMAX -DUNICODE -DWIN32_LEAN_AND_MEAN -D_UNICODE -Dheshun_tsf_EXPORTS
@@ -135,13 +146,13 @@ build CMakeFiles\heshun_tsf.dir\src\heshun_icon.rc.res: RC_COMPILER__heshun_tsf_
 #############################################
 # Link the shared library bin\heshun_tsf.dll
 
-build bin\heshun_tsf.dll heshun_tsf.lib: CXX_SHARED_LIBRARY_LINKER__heshun_tsf_Release CMakeFiles\heshun_tsf.dir\src\dllmain.cpp.obj CMakeFiles\heshun_tsf.dir\src\class_factory.cpp.obj CMakeFiles\heshun_tsf.dir\src\text_service.cpp.obj CMakeFiles\heshun_tsf.dir\src\compartment_sink.cpp.obj CMakeFiles\heshun_tsf.dir\src\candidate_list.cpp.obj CMakeFiles\heshun_tsf.dir\src\candidate_window.cpp.obj CMakeFiles\heshun_tsf.dir\src\heshun_icon.rc.res | D$:\Proj\Heshun-ime\heshun-tsf\..\target\x86_64-pc-windows-msvc\release\heshun.lib D$:\Proj\Heshun-ime\heshun-tsf\src\heshun_tsf.def
+build bin\heshun_tsf.dll heshun_tsf.lib: CXX_SHARED_LIBRARY_LINKER__heshun_tsf_Release CMakeFiles\heshun_tsf.dir\src\dllmain.cpp.obj CMakeFiles\heshun_tsf.dir\src\class_factory.cpp.obj CMakeFiles\heshun_tsf.dir\src\text_service.cpp.obj CMakeFiles\heshun_tsf.dir\src\compartment_sink.cpp.obj CMakeFiles\heshun_tsf.dir\src\candidate_list.cpp.obj CMakeFiles\heshun_tsf.dir\src\key_event.cpp.obj CMakeFiles\heshun_tsf.dir\src\candidate_window.cpp.obj CMakeFiles\heshun_tsf.dir\src\heshun_icon.rc.res | D$:\Proj\Heshun-ime\heshun-tsf\..\target\x86_64-pc-windows-msvc\release\heshun.lib D$:\Proj\Heshun-ime\heshun-tsf\src\heshun_tsf.def
   CONFIG = Release
   LANGUAGE_COMPILE_FLAGS = -MD
   LINK_FLAGS = /DEF:D:\Proj\Heshun-ime\heshun-tsf\src\heshun_tsf.def
   LINK_LIBRARIES = ole32.lib  advapi32.lib  ws2_32.lib  ntdll.lib  userenv.lib  D:\Proj\Heshun-ime\heshun-tsf\..\target\x86_64-pc-windows-msvc\release\heshun.lib  kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib
   OBJECT_DIR = CMakeFiles\heshun_tsf.dir
-  POST_BUILD = C:\Windows\system32\cmd.exe /C "cd /D D:\Proj\Heshun-ime\heshun-tsf\build-tsf && C:\Users\sxl\AppData\Roaming\uv\tools\cmake\Lib\site-packages\cmake\data\bin\cmake.exe -E copy_if_different D:/Proj/Heshun-ime/heshun-tsf/../target/x86_64-pc-windows-msvc/release/heshun.dll D:/Proj/Heshun-ime/heshun-tsf/build-tsf/bin/heshun.dll && C:\Users\sxl\AppData\Roaming\uv\tools\cmake\Lib\site-packages\cmake\data\bin\cmake.exe -E make_directory D:/Proj/Heshun-ime/heshun-tsf/build-tsf/bin/schemas && C:\Users\sxl\AppData\Roaming\uv\tools\cmake\Lib\site-packages\cmake\data\bin\cmake.exe -E copy_directory D:/Proj/Heshun-ime/heshun-tsf/../heshun/schemas D:/Proj/Heshun-ime/heshun-tsf/build-tsf/bin/schemas"
+  POST_BUILD = C:\Windows\system32\cmd.exe /C "cd /D D:\Proj\Heshun-ime\heshun-tsf\build-tsf && C:\Users\sxl\AppData\Roaming\uv\tools\cmake\Lib\site-packages\cmake\data\bin\cmake.exe -E copy_if_different D:/Proj/Heshun-ime/heshun-tsf/../target/x86_64-pc-windows-msvc/release/heshun.dll D:/Proj/Heshun-ime/heshun-tsf/build-tsf/bin/heshun.dll && C:\Users\sxl\AppData\Roaming\uv\tools\cmake\Lib\site-packages\cmake\data\bin\cmake.exe -E make_directory D:/Proj/Heshun-ime/heshun-tsf/build-tsf/bin/schemas && C:\Users\sxl\AppData\Roaming\uv\tools\cmake\Lib\site-packages\cmake\data\bin\cmake.exe -E copy_directory D:/Proj/Heshun-ime/heshun-tsf/../heshun/schemas D:/Proj/Heshun-ime/heshun-tsf/build-tsf/bin/schemas && C:\Users\sxl\AppData\Roaming\uv\tools\cmake\Lib\site-packages\cmake\data\bin\cmake.exe -E copy_if_different D:/Proj/Heshun-ime/heshun-tsf/assets/heshun-ui.ini D:/Proj/Heshun-ime/heshun-tsf/build-tsf/bin/heshun-ui.ini"
   PRE_LINK = cd .
   RESTAT = 1
   TARGET_COMPILE_PDB = CMakeFiles\heshun_tsf.dir\
@@ -318,6 +329,59 @@ build bin\heshun_tsf_tsf_interface_contract.exe: CXX_EXECUTABLE_LINKER__heshun_t
   TARGET_PDB = bin\heshun_tsf_tsf_interface_contract.pdb
   TARGET_SUPPORT_DIR = CMakeFiles\heshun_tsf_tsf_interface_contract.dir
 
+# =============================================================================
+# Object build statements for EXECUTABLE target heshun_tsf_key_event_contract
+
+
+#############################################
+# Order-only phony target for heshun_tsf_key_event_contract
+
+build cmake_object_order_depends_target_heshun_tsf_key_event_contract: phony || .
+
+build CMakeFiles\heshun_tsf_key_event_contract.dir\tests\key_event_contract.cpp.obj: CXX_COMPILER__heshun_tsf_key_event_contract_unscanned_Release D$:\Proj\Heshun-ime\heshun-tsf\tests\key_event_contract.cpp || cmake_object_order_depends_target_heshun_tsf_key_event_contract
+  CONFIG = Release
+  DEFINES = -DNOMINMAX -DUNICODE -DWIN32_LEAN_AND_MEAN -D_UNICODE
+  FLAGS = -std:c++17 -MD /utf-8
+  INCLUDES = -ID:\Proj\Heshun-ime\heshun-tsf\src
+  OBJECT_DIR = CMakeFiles\heshun_tsf_key_event_contract.dir
+  OBJECT_FILE_DIR = CMakeFiles\heshun_tsf_key_event_contract.dir\tests
+  TARGET_COMPILE_PDB = CMakeFiles\heshun_tsf_key_event_contract.dir\
+  TARGET_PDB = bin\heshun_tsf_key_event_contract.pdb
+  TARGET_SUPPORT_DIR = CMakeFiles\heshun_tsf_key_event_contract.dir
+
+build CMakeFiles\heshun_tsf_key_event_contract.dir\src\key_event.cpp.obj: CXX_COMPILER__heshun_tsf_key_event_contract_unscanned_Release D$:\Proj\Heshun-ime\heshun-tsf\src\key_event.cpp || cmake_object_order_depends_target_heshun_tsf_key_event_contract
+  CONFIG = Release
+  DEFINES = -DNOMINMAX -DUNICODE -DWIN32_LEAN_AND_MEAN -D_UNICODE
+  FLAGS = -std:c++17 -MD /utf-8
+  INCLUDES = -ID:\Proj\Heshun-ime\heshun-tsf\src
+  OBJECT_DIR = CMakeFiles\heshun_tsf_key_event_contract.dir
+  OBJECT_FILE_DIR = CMakeFiles\heshun_tsf_key_event_contract.dir\src
+  TARGET_COMPILE_PDB = CMakeFiles\heshun_tsf_key_event_contract.dir\
+  TARGET_PDB = bin\heshun_tsf_key_event_contract.pdb
+  TARGET_SUPPORT_DIR = CMakeFiles\heshun_tsf_key_event_contract.dir
+
+
+# =============================================================================
+# Link build statements for EXECUTABLE target heshun_tsf_key_event_contract
+
+
+#############################################
+# Link the executable bin\heshun_tsf_key_event_contract.exe
+
+build bin\heshun_tsf_key_event_contract.exe: CXX_EXECUTABLE_LINKER__heshun_tsf_key_event_contract_Release CMakeFiles\heshun_tsf_key_event_contract.dir\tests\key_event_contract.cpp.obj CMakeFiles\heshun_tsf_key_event_contract.dir\src\key_event.cpp.obj
+  CONFIG = Release
+  FLAGS = -MD
+  LINK_FLAGS = /subsystem:console
+  LINK_LIBRARIES = kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib
+  OBJECT_DIR = CMakeFiles\heshun_tsf_key_event_contract.dir
+  POST_BUILD = cd .
+  PRE_LINK = cd .
+  TARGET_COMPILE_PDB = CMakeFiles\heshun_tsf_key_event_contract.dir\
+  TARGET_FILE = bin\heshun_tsf_key_event_contract.exe
+  TARGET_IMPLIB = heshun_tsf_key_event_contract.lib
+  TARGET_PDB = bin\heshun_tsf_key_event_contract.pdb
+  TARGET_SUPPORT_DIR = CMakeFiles\heshun_tsf_key_event_contract.dir
+
 
 #############################################
 # Utility command for test
@@ -369,6 +433,10 @@ build heshun_tsf_activation_probe: phony bin\heshun_tsf_activation_probe.exe
 
 build heshun_tsf_activation_probe.exe: phony bin\heshun_tsf_activation_probe.exe
 
+build heshun_tsf_key_event_contract: phony bin\heshun_tsf_key_event_contract.exe
+
+build heshun_tsf_key_event_contract.exe: phony bin\heshun_tsf_key_event_contract.exe
+
 build heshun_tsf_profile: phony bin\heshun_tsf_profile.exe
 
 build heshun_tsf_profile.exe: phony bin\heshun_tsf_profile.exe
@@ -385,7 +453,7 @@ build heshun_tsf_tsf_interface_contract.exe: phony bin\heshun_tsf_tsf_interface_
 #############################################
 # Folder: D:/Proj/Heshun-ime/heshun-tsf/build-tsf
 
-build all: phony bin\heshun_tsf.dll bin\heshun_tsf_profile.exe bin\heshun_tsf_activation_probe.exe bin\heshun_tsf_abi_header_contract.exe bin\heshun_tsf_tsf_interface_contract.exe
+build all: phony bin\heshun_tsf.dll bin\heshun_tsf_profile.exe bin\heshun_tsf_activation_probe.exe bin\heshun_tsf_abi_header_contract.exe bin\heshun_tsf_tsf_interface_contract.exe bin\heshun_tsf_key_event_contract.exe
 
 # =============================================================================
 # Built-in targets

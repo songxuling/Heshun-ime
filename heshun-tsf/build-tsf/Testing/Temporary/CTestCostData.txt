@@ -1,4 +1,5 @@
-tsf_binary_exports 11 0.0317362
-tsf_abi_header_contract 12 0.000693
-tsf_tsf_interface_contract 12 0.000667392
+tsf_binary_exports 19 0.0195007
+tsf_abi_header_contract 20 0.000428865
+tsf_tsf_interface_contract 20 0.000387375
+tsf_key_event_contract 8 0.00138252
 ---
