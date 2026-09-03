@@ -15,6 +15,21 @@ struct CandidateKey {
     bool operator!=(const CandidateKey& other) const { return !(*this == other); }
 };
 
+struct CandidateWindowStyle {
+    COLORREF background = RGB(255, 255, 255);
+    COLORREF border = RGB(190, 190, 190);
+    COLORREF text = RGB(30, 30, 30);
+    COLORREF selection_background = RGB(220, 235, 252);
+    COLORREF selection_text = RGB(0, 50, 110);
+    COLORREF caret = RGB(0, 120, 215);
+    int font_size = 11;
+    int width = 500;
+    int header_height = 28;
+    int row_height = 25;
+    int padding = 8;
+    std::wstring font_family = L"Microsoft YaHei";
+};
+
 class CandidateWindow final {
 public:
     CandidateWindow() = default;
@@ -26,6 +41,7 @@ public:
     void Show(std::wstring pending, std::vector<std::wstring> candidates, std::vector<CandidateKey> keys, unsigned int page_index, unsigned int page_size, unsigned int total, unsigned int cursor);
     void Hide();
     void SetAnchorRect(const RECT& rect);
+    void ReloadStyle();
     void SetCandidateClickHandler(std::function<void(CandidateKey)> handler);
     void MoveSelection(int direction);
     void UseKeyboardSelection();
@@ -52,4 +68,5 @@ private:
     bool caret_visible_ = true;
     RECT anchor_rect_{};
     bool has_anchor_rect_ = false;
+    CandidateWindowStyle style_{};
 };

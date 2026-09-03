@@ -24,6 +24,7 @@
 #include "guids.h"
 #include "resource.h"
 #include "text_service.h"
+#include "key_event.h"
 
 extern HINSTANCE g_module_instance;
 extern volatile LONG g_object_count;
@@ -58,6 +59,10 @@ public:
         InterlockedIncrement(&g_object_count);
     }
     ~HeshunLangBarItem() {
+        if (sink_) {
+            sink_->Release();
+            sink_ = nullptr;
+        }
         service_->Release();
         InterlockedDecrement(&g_object_count);
     }
@@ -199,6 +204,12 @@ public:
 
     void NotifyUpdate(DWORD flags = TF_LBI_TEXT | TF_LBI_ICON | TF_LBI_STATUS) override {
         if (sink_) sink_->OnUpdate(flags);
+    }
+    void SetDisabled(bool disabled) {
+        const DWORD old_status = status_;
+        if (disabled) status_ |= TF_LBI_STATUS_DISABLED;
+        else status_ &= ~TF_LBI_STATUS_DISABLED;
+        if (old_status != status_) NotifyUpdate(TF_LBI_STATUS);
     }
 
 private:
@@ -552,16 +563,6 @@ std::string Utf16ToUtf8(const std::wstring& value) {
     return result;
 }
 
-std::wstring ShiftOemSymbol(WPARAM key, LPARAM lparam) {
-    if ((GetKeyState(VK_SHIFT) & 0x8000) == 0 || key < VK_OEM_1 || key > VK_OEM_8) return {};
-    BYTE state[256]{};
-    if (!GetKeyboardState(state)) return {};
-    wchar_t symbol[4]{};
-    const int written = ToUnicodeEx(static_cast<UINT>(key), static_cast<UINT>((lparam >> 16) & 0xff),
-                                    state, symbol, static_cast<int>(std::size(symbol)), 0,
-                                    GetKeyboardLayout(0));
-    return written > 0 ? std::wstring(symbol, symbol + written) : std::wstring{};
-}
 
 std::wstring Utf8ViewToUtf16(hs_text_view view) {
     if (!view.ptr || !view.len) return {};
@@ -802,8 +803,11 @@ STDMETHODIMP HeshunTextService::ActivateEx(ITfThreadMgr* thread_mgr, TfClientId 
     thread_mgr_ = thread_mgr;
     thread_mgr_->AddRef();
     client_id_ = client_id;
-    if (!LoadEngine()) { Trace("ActivateEx: heshun engine/schema load failed"); Deactivate(); return E_FAIL; }
-    Trace("ActivateEx: engine loaded");
+    if (!LoadEngine()) {
+        Trace("ActivateEx: heshun engine/schema load failed; activating in degraded mode");
+    } else {
+        Trace("ActivateEx: engine loaded");
+    }
 
     HRESULT hr = E_FAIL;
     ITfSource* thread_source = nullptr;
@@ -891,13 +895,21 @@ STDMETHODIMP HeshunTextService::ActivateEx(ITfThreadMgr* thread_mgr, TfClientId 
         SyncKeyboardCompartments();
         const HRESULT compartment_hr = InitCompartmentSinks();
         Trace("ActivateEx: compartment sinks advise " + Hr(compartment_hr));
-        if (FAILED(compartment_hr)) hr = compartment_hr;
+        if (FAILED(compartment_hr)) {
+            hr = compartment_hr;
+        } else {
+            OnCompartmentChanged(GUID_COMPARTMENT_KEYBOARD_DISABLED);
+            OnCompartmentChanged(GUID_COMPARTMENT_EMPTYCONTEXT);
+            OnCompartmentChanged(GUID_COMPARTMENT_KEYBOARD_OPENCLOSE);
+            OnCompartmentChanged(GUID_COMPARTMENT_KEYBOARD_INPUTMODE_CONVERSION);
+        }
         Trace("ActivateEx: key sink and language bar advised");
     }
     return hr;
 }
 
 STDMETHODIMP HeshunTextService::Deactivate() {
+    if (candidate_list_) candidate_list_->End();
     UninitCompartmentSinks();
     UninitThreadFocusSink();
     UninitTextEditSink();
@@ -1088,6 +1100,11 @@ void HeshunTextService::ShowLanguageBar(bool show) {
     if (SUCCEEDED(hr) && langbar_status_) langbar_status_->NotifyUpdate(TF_LBI_STATUS);
 }
 
+void HeshunTextService::SetLanguageBarDisabled(bool disabled) {
+    auto* item = static_cast<HeshunLangBarItem*>(langbar_status_);
+    if (item) item->SetDisabled(disabled);
+}
+
 STDMETHODIMP HeshunTextService::OnActivated(REFCLSID clsid, REFGUID profile, BOOL activated) {
     // TSF sends the notification for the profile transition.  The matching
     // service receives its own deactivation before another TIP is activated;
@@ -1120,17 +1137,36 @@ const char* HeshunTextService::ActiveUserDictFile() const {
 
 bool HeshunTextService::LoadEngine() {
     const std::string directory = ModuleDirectory();
-    if (directory.empty()) { Trace("LoadEngine: module directory unavailable"); return false; }
+    if (directory.empty()) {
+        runtime_degraded_ = true;
+        Trace("LoadEngine: module directory unavailable; runtime degraded");
+        return false;
+    }
     const std::string schema = directory + "\\schemas\\" + ActiveSchemaFile();
     Trace("LoadEngine schema: " + schema);
     runtime_ = hs_runtime_new_schema(schema.c_str());
-    if (!runtime_) { Trace("LoadEngine: hs_runtime_new_schema returned null"); return false; }
+    if (!runtime_) {
+        runtime_degraded_ = true;
+        next_runtime_retry_tick_ = GetTickCount() + 2000;
+        Trace("LoadEngine: schema load failed; retry scheduled");
+        return false;
+    }
+    runtime_degraded_ = false;
+    next_runtime_retry_tick_ = 0;
     pending_.clear();
     candidates_.clear();
     page_index_ = 0;
     total_candidates_ = 0;
     has_selected_key_ = false;
     return true;
+}
+
+bool HeshunTextService::TryRecoverEngine() {
+    if (runtime_) return true;
+    const DWORD now = GetTickCount();
+    if (runtime_degraded_ && static_cast<LONG>(now - next_runtime_retry_tick_) < 0) return false;
+    Trace("RuntimeRecovery: attempting schema reload");
+    return LoadEngine();
 }
 
 void HeshunTextService::RefreshPersistentInputMode() {
@@ -1154,7 +1190,12 @@ bool HeshunTextService::DispatchRuntime(unsigned int opcode, long long value, Ca
     event.source = key.source;
     event.ordinal = key.ordinal;
     hs_handle* result = hs_runtime_event(runtime_, &event);
-    if (!result) return false;
+    if (!result) {
+        runtime_degraded_ = true;
+        next_runtime_retry_tick_ = GetTickCount() + 2000;
+        Trace("RuntimeEvent: runtime returned null; recovery scheduled");
+        return false;
+    }
     const hs_runtime_result* view = hs_runtime_result_view(result);
     if (!view) { hs_runtime_result_free(result); return false; }
 
@@ -1285,16 +1326,18 @@ void HeshunTextService::OnCompartmentChanged(REFGUID guid) {
     if (guid == GUID_COMPARTMENT_KEYBOARD_DISABLED && ReadCompartmentDWORD(guid, &value)) {
         keyboard_disabled_ = value != 0;
         if (keyboard_disabled_) ClearActiveContext("KeyboardDisabled");
+        SetLanguageBarDisabled(keyboard_disabled_ || empty_context_);
     } else if (guid == GUID_COMPARTMENT_EMPTYCONTEXT && ReadCompartmentDWORD(guid, &value)) {
         empty_context_ = value != 0;
         if (empty_context_) ClearActiveContext("EmptyContext");
+        SetLanguageBarDisabled(keyboard_disabled_ || empty_context_);
     } else if (guid == GUID_COMPARTMENT_KEYBOARD_OPENCLOSE && ReadCompartmentDWORD(guid, &value)) {
         keyboard_open_ = value != 0;
         if (!keyboard_open_) ClearActiveContext("KeyboardClosed");
         ShowLanguageBar(keyboard_open_);
     } else if (guid == GUID_COMPARTMENT_KEYBOARD_INPUTMODE_CONVERSION && ReadCompartmentDWORD(guid, &value)) {
         conversion_mode_ = value;
-        const bool external_ascii = (value & TF_CONVERSIONMODE_ALPHANUMERIC) != 0;
+        const bool external_ascii = (value & TF_CONVERSIONMODE_NATIVE) == 0;
         if (ascii_mode_ != external_ascii) {
             ascii_mode_ = external_ascii;
             if (runtime_) DispatchRuntime(9);
@@ -1309,7 +1352,9 @@ void HeshunTextService::SaveUserDictionary() {
     const std::string directory = ModuleDirectory();
     if (!directory.empty()) {
         const std::string user_dict = directory + "\\data\\" + ActiveUserDictFile();
-        hs_runtime_user_dict_save(runtime_, user_dict.c_str());
+        const int saved = hs_runtime_user_dict_save(runtime_, user_dict.c_str());
+        if (!saved) Trace("Runtime: user dictionary save failed path=" + user_dict);
+        else Trace("Runtime: user dictionary saved");
     }
 }
 
@@ -1332,6 +1377,7 @@ void HeshunTextService::QueueCompositionUpdate(ITfContext* context) {
 }
 
 void HeshunTextService::FreeEngine() {
+    if (candidate_list_) candidate_list_->End();
     if (active_context_ && composition_) {
         const HRESULT cancel_hr = CancelComposition(active_context_);
         Trace(FAILED(cancel_hr) ? "FreeEngine: composition cancel failed " + Hr(cancel_hr)
@@ -1478,14 +1524,13 @@ void HeshunTextService::SelectInputMethodFromLangBar(bool pinyin) {
 }
 
 bool HeshunTextService::IsHandledKey(WPARAM key) const {
+    if (keyboard_disabled_ || empty_context_ || !keyboard_open_) return false;
+    const HeshunKeyState state = CaptureHeshunKeyState(0);
     if (key == VK_SHIFT) return true;
-    if (key == VK_OEM_3 && (GetKeyState(VK_CONTROL) & 0x8000)) return true;
+    if (key == VK_OEM_3 && state.Control() && !state.Alt() && !state.Windows()) return true;
     // Modifier shortcuts belong to the host application. In particular,
     // Ctrl+V must not be interpreted as the letter 'v' by the input method.
-    if ((GetKeyState(VK_CONTROL) & 0x8000) ||
-        (GetKeyState(VK_MENU) & 0x8000) ||
-        (GetKeyState(VK_LWIN) & 0x8000) ||
-        (GetKeyState(VK_RWIN) & 0x8000)) return false;
+    if (IsHostShortcut(key, state)) return false;
     if (ascii_mode_) return false;
     if (key >= 'A' && key <= 'Z') return true;
     if (key >= 'a' && key <= 'z') return true;
@@ -1570,6 +1615,14 @@ STDMETHODIMP HeshunTextService::OnInitDocumentMgr(ITfDocumentMgr*) {
 }
 
 STDMETHODIMP HeshunTextService::OnUninitDocumentMgr(ITfDocumentMgr* document_manager) {
+    if (document_manager) {
+        ITfContext* top = nullptr;
+        if (SUCCEEDED(document_manager->GetTop(&top)) && top) {
+            if (top == text_edit_sink_context_) UninitTextEditSink();
+            if (top == text_layout_sink_context_) UninitTextLayoutSink();
+            top->Release();
+        }
+    }
     if (!active_context_ || !document_manager) return S_OK;
     ITfDocumentMgr* owner = nullptr;
     if (SUCCEEDED(active_context_->GetDocumentMgr(&owner))) {
@@ -1681,6 +1734,11 @@ STDMETHODIMP HeshunTextService::OnKeyDown(ITfContext* context, WPARAM wparam, LP
         return S_OK;
     }
     RefreshPersistentInputMode();
+    if (!runtime_ && !TryRecoverEngine()) {
+        *eaten = FALSE;
+        Trace("OnKeyDown: runtime unavailable; key passed to host");
+        return S_OK;
+    }
     if (context && context != active_context_) {
         ClearActiveContext("ContextChanged");
         active_context_ = context;
@@ -1701,7 +1759,9 @@ STDMETHODIMP HeshunTextService::OnKeyDown(ITfContext* context, WPARAM wparam, LP
     }
     if (shift_down_) shift_used_with_other_key_ = true;
     if (HasPending()) {
-        const std::wstring symbol = ShiftOemSymbol(wparam, lparam);
+        const HeshunKeyState key_state = CaptureHeshunKeyState(lparam);
+        const std::wstring symbol = IsHostShortcut(wparam, key_state) ? std::wstring{} :
+                                    TranslateHeshunKeyText(wparam, key_state);
         if (!symbol.empty()) {
             const std::string text = Utf16ToUtf8(pending_ + symbol);
             if (text.empty()) return E_FAIL;

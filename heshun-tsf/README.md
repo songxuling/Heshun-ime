@@ -17,6 +17,7 @@ Windows TSF (Text Services Framework) shell for the `heshun` Rust input-method e
 - Backspace edits the pending code while one exists, then returns to the host application to delete committed text once the pending code is empty.
 - Escape clears pending code. `Delete` remains owned by the host application.
 - Tap Shift alone to toggle Chinese and English modes. A Shift key used with another key does not toggle modes. `Ctrl+`` switches Zhengma and full Pinyin and clears an unfinished composition.
+- Candidate-window colors, font, width, row/header sizes, and padding can be hot-reloaded from `heshun-ui.ini` beside `heshun_tsf.dll`; a default file is copied by the build and package scripts.
 
 ## Build
 

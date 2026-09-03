@@ -12,6 +12,7 @@ add_library(heshun_tsf SHARED
   src/text_service.cpp
   src/compartment_sink.cpp
   src/candidate_list.cpp
+  src/key_event.cpp
   src/candidate_window.cpp
   src/heshun_icon.rc
   src/heshun_tsf.def
@@ -46,6 +47,8 @@ if(EXISTS "${HESHUN_RELEASE_DIR}/heshun.lib")
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:heshun_tsf>/schemas"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
       "${CMAKE_CURRENT_SOURCE_DIR}/../heshun/schemas" "$<TARGET_FILE_DIR:heshun_tsf>/schemas"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${CMAKE_CURRENT_SOURCE_DIR}/assets/heshun-ui.ini" "$<TARGET_FILE_DIR:heshun_tsf>/heshun-ui.ini"
     COMMENT "Copying heshun runtime and schemas beside the TSF DLL"
   )
 else()
@@ -56,10 +59,13 @@ add_executable(heshun_tsf_profile src/profile_tool.cpp)
 add_executable(heshun_tsf_activation_probe tests/com_activation_probe.cpp)
 add_executable(heshun_tsf_abi_header_contract tests/abi_header_contract.cpp)
 add_executable(heshun_tsf_tsf_interface_contract tests/tsf_interface_contract.cpp)
+add_executable(heshun_tsf_key_event_contract tests/key_event_contract.cpp)
+target_sources(heshun_tsf_key_event_contract PRIVATE src/key_event.cpp)
 target_compile_definitions(heshun_tsf_profile PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_definitions(heshun_tsf_activation_probe PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_definitions(heshun_tsf_abi_header_contract PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_definitions(heshun_tsf_tsf_interface_contract PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_definitions(heshun_tsf_key_event_contract PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_include_directories(heshun_tsf_profile PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_include_directories(heshun_tsf_activation_probe PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_include_directories(heshun_tsf_abi_header_contract PRIVATE
@@ -70,11 +76,16 @@ target_include_directories(heshun_tsf_tsf_interface_contract PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${CMAKE_CURRENT_SOURCE_DIR}/../heshun/include
 )
+target_include_directories(heshun_tsf_key_event_contract PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(heshun_tsf_profile PRIVATE ole32)
 target_link_libraries(heshun_tsf_activation_probe PRIVATE ole32)
 set_target_properties(heshun_tsf_activation_probe PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
+set_target_properties(heshun_tsf_key_event_contract PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
 set_target_properties(heshun_tsf_profile PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
@@ -93,6 +104,10 @@ add_test(NAME tsf_binary_exports
 add_test(NAME tsf_abi_header_contract
   COMMAND "$<TARGET_FILE:heshun_tsf_abi_header_contract>"
 )
+add_test(NAME tsf_key_event_contract
+  COMMAND "$<TARGET_FILE:heshun_tsf_key_event_contract>"
+)
+
 add_test(NAME tsf_tsf_interface_contract
   COMMAND "$<TARGET_FILE:heshun_tsf_tsf_interface_contract>"
 )

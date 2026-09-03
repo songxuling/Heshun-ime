@@ -92,6 +92,7 @@ public:
     void QueueCompositionUpdate(ITfContext* context);
     void UpdateCandidateAnchor(const RECT& rect);
     void OnCompartmentChanged(REFGUID guid);
+    void SetLanguageBarDisabled(bool disabled);
     HRESULT FocusedDocumentManager(ITfDocumentMgr** manager) const;
     size_t candidate_count() const { return candidates_.size(); }
     unsigned int candidate_page() const { return page_index_; }
@@ -110,6 +111,7 @@ private:
     ~HeshunTextService();
 
     bool LoadEngine();
+    bool TryRecoverEngine();
     void RefreshPersistentInputMode();
     const char* ActiveSchemaId() const;
     const char* ActiveSchemaFile() const;
@@ -168,6 +170,8 @@ private:
     ITfContext* text_edit_sink_context_ = nullptr;
     ITfContext* text_layout_sink_context_ = nullptr;
     bool ascii_mode_ = false;
+    bool runtime_degraded_ = false;
+    DWORD next_runtime_retry_tick_ = 0;
     bool keyboard_disabled_ = false;
     bool empty_context_ = false;
     bool keyboard_open_ = true;

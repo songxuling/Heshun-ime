@@ -57,3 +57,4 @@ On this Windows SDK, `msctf.h` exists but `msctf.lib` does not; do not link `msc
 - `regsvr32` COM register/unregister roundtrip passes.
 - Registered DLL passes `CoCreateInstance(CLSID_HeshunTextService, IID_ITfTextInputProcessorEx)`.
 - Core Rust release build and the current TSF CTest baseline must be recorded separately from real-host verification; a successful COM probe does not prove composition or host input.
+- `HOST_MATRIX.md` contains the reproducible automated checks and the Notepad/Word/WPF/UWP/browser/manual DPI acceptance matrix.

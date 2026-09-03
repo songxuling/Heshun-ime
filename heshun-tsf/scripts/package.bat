@@ -32,6 +32,7 @@ mkdir "%DIST%\schemas" || exit /b 1
 copy /y "%BIN%\heshun_tsf.dll" "%DIST%\" >nul || exit /b 1
 copy /y "%BIN%\heshun.dll" "%DIST%\" >nul || exit /b 1
 copy /y "%BIN%\heshun_tsf_profile.exe" "%DIST%\" >nul || exit /b 1
+if exist "%BIN%\heshun-ui.ini" copy /y "%BIN%\heshun-ui.ini" "%DIST%\" >nul
 xcopy /e /i /y /q "%BIN%\schemas" "%DIST%\schemas" >nul || exit /b 1
 copy /y "%~dp0register.bat" "%DIST%\" >nul || exit /b 1
 copy /y "%~dp0unregister.bat" "%DIST%\" >nul || exit /b 1
