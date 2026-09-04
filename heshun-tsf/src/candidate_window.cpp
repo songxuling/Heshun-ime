@@ -17,21 +17,12 @@ void CandidateTrace(const std::string& message) {
     std::filesystem::path log_path(module_path, module_path + length);
     log_path = log_path.parent_path() / L"heshun-tsf.log";
     std::ofstream log(log_path, std::ios::app);
-    if (log) log << message << '\\n';
+    if (log) log << message << '\n';
 }
 
 constexpr wchar_t kClassName[] = L"HeshunTsfCandidateWindow";
-constexpr COLORREF kBackground = RGB(255, 255, 255);
-constexpr COLORREF kBorder = RGB(190, 190, 190);
-constexpr COLORREF kText = RGB(30, 30, 30);
-constexpr COLORREF kSelectionBackground = RGB(220, 235, 252);
-constexpr COLORREF kSelectionText = RGB(0, 50, 110);
-constexpr COLORREF kCaret = RGB(0, 120, 215);
 constexpr UINT_PTR kCaretTimer = 1;
 constexpr UINT kCaretBlinkMs = 530;
-constexpr int kHeaderHeight = 28;
-constexpr int kRowHeight = 25;
-constexpr int kPadding = 8;
 
 int DpiForWindow(HWND window) {
     const UINT dpi = window ? GetDpiForWindow(window) : 96;
@@ -69,7 +60,7 @@ bool CandidateWindow::EnsureWindow() {
         wc.lpfnWndProc = &CandidateWindow::WindowProc;
         wc.hInstance = GetModuleHandleW(nullptr);
         wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-        wc.hbrBackground = CreateSolidBrush(kBackground);
+        wc.hbrBackground = nullptr;
         wc.lpszClassName = kClassName;
         RegisterClassW(&wc);
     });
@@ -108,9 +99,45 @@ void CandidateWindow::Show(std::wstring pending, std::vector<std::wstring> candi
     HWND foreground = GetForegroundWindow();
     POINT anchor{};
     HWND anchor_window = nullptr;
-    const bool has_tsf_anchor = has_anchor_rect_;
-    const POINT tsf_anchor{anchor_rect_.left, anchor_rect_.bottom};
+    RECT foreground_rect{};
+    const bool has_foreground_rect = foreground && GetWindowRect(foreground, &foreground_rect);
+    POINT gui_caret{};
     bool has_gui_caret = false;
+    const bool has_tsf_anchor = has_anchor_rect_ &&
+        anchor_rect_.right >= anchor_rect_.left && anchor_rect_.bottom >= anchor_rect_.top;
+    RECT corrected_tsf_rect = anchor_rect_;
+    bool corrected_tsf_anchor = false;
+    if (has_tsf_anchor && has_foreground_rect) {
+        GUITHREADINFO caret_info{sizeof(caret_info)};
+        const bool has_raw_gui_caret = GetGUIThreadInfo(
+            GetWindowThreadProcessId(foreground, nullptr), &caret_info) &&
+            caret_info.hwndCaret && caret_info.rcCaret.right >= caret_info.rcCaret.left &&
+            caret_info.rcCaret.bottom >= caret_info.rcCaret.top;
+        if (has_raw_gui_caret) {
+            gui_caret = POINT{caret_info.rcCaret.left, caret_info.rcCaret.bottom};
+            has_gui_caret = true;
+            if (caret_info.hwndCaret != foreground) {
+                ClientToScreen(caret_info.hwndCaret, &gui_caret);
+                gui_caret.x -= foreground_rect.left;
+                gui_caret.y -= foreground_rect.top;
+            }
+        } else {
+            POINT caret_pos{};
+            if (GetCaretPos(&caret_pos)) {
+                gui_caret = caret_pos;
+                has_gui_caret = true;
+                CandidateTrace("CandidateWindow: using thread GetCaretPos fallback");
+            }
+        }
+        corrected_tsf_rect = CorrectCandidateAnchorRect(
+            corrected_tsf_rect, foreground_rect, has_gui_caret, gui_caret,
+            &corrected_tsf_anchor);
+        if (corrected_tsf_anchor) {
+            CandidateTrace("CandidateWindow: corrected out-of-window TSF rect");
+        }
+    }
+    const bool has_tsf_point = has_tsf_anchor;
+    const POINT tsf_anchor{corrected_tsf_rect.left, corrected_tsf_rect.bottom};
     if (!has_tsf_anchor) {
         has_gui_caret = foreground &&
             GetGUIThreadInfo(GetWindowThreadProcessId(foreground, nullptr), &info) &&
@@ -126,6 +153,11 @@ void CandidateWindow::Show(std::wstring pending, std::vector<std::wstring> candi
         }
     }
     const POINT fallback_anchor{foreground ? 0 : 24, foreground ? 0 : 24};
+    if (!has_tsf_anchor && !has_gui_caret) {
+        CandidateTrace("CandidateWindow: no reliable caret anchor; defer show");
+        Hide();
+        return;
+    }
     anchor = ResolveCandidateAnchorPoint(has_tsf_anchor, tsf_anchor,
                                          has_gui_caret, anchor, fallback_anchor);
     const bool has_caret = has_tsf_anchor || has_gui_caret;
@@ -136,24 +168,65 @@ void CandidateWindow::Show(std::wstring pending, std::vector<std::wstring> candi
 
     const int dpi = DpiForWindow(anchor_window ? anchor_window : window_);
     const int scale = dpi;
-    const int header = MulDiv(style_.header_height, scale, 96);
-        const int row = MulDiv(style_.row_height, scale, 96);
-        const int padding = MulDiv(style_.padding, scale, 96);
+    const int row = MulDiv(style_.row_height, scale, 96);
+    const int padding = MulDiv(style_.padding, scale, 96);
     const int rows = static_cast<int>(std::min<size_t>(9, candidates_.size()));
-    const int client_width = MulDiv(style_.width, scale, 96);
-    const int client_height = header + std::max(1, rows) * row + padding * 2;
+    HFONT measure_font = MakeFont(window_, style_.font_size, style_.font_family);
+    HDC measure_dc = GetDC(window_);
+    HGDIOBJ old_measure_font = nullptr;
+    if (measure_dc && measure_font) old_measure_font = SelectObject(measure_dc, measure_font);
+    SIZE max_text_size{};
+    if (measure_dc) {
+        for (const auto& candidate : candidates_) {
+            const size_t annotation_start = candidate.find(L"  [");
+            const std::wstring word = annotation_start == std::wstring::npos
+                ? candidate : candidate.substr(0, annotation_start);
+            const std::wstring annotation = annotation_start == std::wstring::npos
+                ? L"" : candidate.substr(annotation_start);
+            SIZE word_size{};
+            SIZE annotation_size{};
+            const bool word_measured = GetTextExtentPoint32W(
+                measure_dc, word.c_str(), static_cast<int>(word.size()), &word_size);
+            const bool annotation_measured = annotation.empty() ||
+                GetTextExtentPoint32W(measure_dc, annotation.c_str(),
+                                      static_cast<int>(annotation.size()), &annotation_size);
+            if (word_measured && annotation_measured) {
+                const int rendered_width = static_cast<int>(word_size.cx) +
+                    (annotation.empty() ? 0 : MulDiv(8, scale, 96) + static_cast<int>(annotation_size.cx));
+                max_text_size.cx = static_cast<LONG>(std::max(static_cast<int>(max_text_size.cx), rendered_width));
+            }
+        }
+        if (old_measure_font) SelectObject(measure_dc, old_measure_font);
+        ReleaseDC(window_, measure_dc);
+    }
+    if (measure_font) DeleteObject(measure_font);
+    const int badge_size = std::max(18, row - MulDiv(10, scale, 96));
+    const int width_padding = padding * 2;
+    // The renderer offsets the badge by 2px inside the content area. Include
+    // that offset so a long annotation is not clipped by the right padding.
+    const int measured_content = max_text_size.cx + width_padding + MulDiv(2, scale, 96);
+    const int client_width = DynamicCandidateClientWidth(
+        measured_content, badge_size, MulDiv(10, scale, 96),
+        MulDiv(style_.min_width, scale, 96), MulDiv(style_.max_width, scale, 96));
+    const int client_height = CandidateWindowContentHeight(static_cast<size_t>(rows), row, padding);
     RECT frame{0, 0, client_width, client_height};
     AdjustWindowRectExForDpi(&frame, WS_POPUP, FALSE, WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST, dpi);
     const int width = frame.right - frame.left;
     const int height = frame.bottom - frame.top;
+
+    if (style_.corner_radius > 0) {
+        const int radius = MulDiv(style_.corner_radius, scale, 96);
+        HRGN region = CreateRoundRectRgn(0, 0, width + 1, height + 1, radius * 2, radius * 2);
+        if (region) SetWindowRgn(window_, region, FALSE);
+    }
 
     HMONITOR monitor = MonitorFromPoint(anchor, MONITOR_DEFAULTTONEAREST);
     MONITORINFO monitor_info{sizeof(monitor_info)};
     GetMonitorInfoW(monitor, &monitor_info);
     const RECT work = monitor_info.rcWork;
     const int x = std::clamp(anchor.x, work.left, std::max(work.left, work.right - width));
-    const int y = std::clamp(anchor.y + (has_caret ? 4 : 0),
-                             work.top, std::max(work.top, work.bottom - height));
+    const int y = CandidateWindowTopForAnchor(corrected_tsf_rect.top, corrected_tsf_rect.bottom,
+                                               height, work.top, work.bottom, has_caret ? 4 : 0);
     CandidateTrace("CandidateWindow: anchor=" + std::to_string(anchor.x) + "," +
                    std::to_string(anchor.y) + " tsf=" + std::to_string(has_tsf_anchor) +
                    " gui=" + std::to_string(has_gui_caret) + " final=" + std::to_string(x) +
@@ -212,14 +285,18 @@ void CandidateWindow::ReloadStyle() {
     style_.background = ReadStyleColor(file, L"background", style_.background);
     style_.border = ReadStyleColor(file, L"border", style_.border);
     style_.text = ReadStyleColor(file, L"text", style_.text);
+    style_.annotation = ReadStyleColor(file, L"annotation", style_.annotation);
     style_.selection_background = ReadStyleColor(file, L"selection_background", style_.selection_background);
     style_.selection_text = ReadStyleColor(file, L"selection_text", style_.selection_text);
+    style_.number_background = ReadStyleColor(file, L"number_background", style_.number_background);
+    style_.number_text = ReadStyleColor(file, L"number_text", style_.number_text);
     style_.caret = ReadStyleColor(file, L"caret", style_.caret);
     style_.font_size = std::clamp(ReadStyleInt(file, L"font_size", style_.font_size), 6, 48);
-    style_.width = std::clamp(ReadStyleInt(file, L"width", style_.width), 160, 1600);
-    style_.header_height = std::clamp(ReadStyleInt(file, L"header_height", style_.header_height), 16, 80);
+    style_.min_width = std::clamp(ReadStyleInt(file, L"min_width", style_.min_width), 120, 800);
+    style_.max_width = std::clamp(ReadStyleInt(file, L"max_width", style_.max_width), style_.min_width, 2000);
     style_.row_height = std::clamp(ReadStyleInt(file, L"row_height", style_.row_height), 16, 80);
     style_.padding = std::clamp(ReadStyleInt(file, L"padding", style_.padding), 0, 40);
+    style_.corner_radius = std::clamp(ReadStyleInt(file, L"corner_radius", style_.corner_radius), 0, 32);
     wchar_t family[LF_FACESIZE]{};
     GetPrivateProfileStringW(L"candidate", L"font_family", style_.font_family.c_str(),
                              family, ARRAYSIZE(family), file.c_str());
@@ -228,12 +305,10 @@ void CandidateWindow::ReloadStyle() {
 
 size_t CandidateWindow::RowAtY(int y) const {
     const int scale = DpiForWindow(window_);
-    const int header = MulDiv(style_.header_height, scale, 96);
-        const int row = MulDiv(style_.row_height, scale, 96);
-        const int padding = MulDiv(style_.padding, scale, 96);
-    if (y < padding + header) return candidates_.size();
-    const size_t index = static_cast<size_t>((y - padding - header) / std::max(1, row));
-    return index < std::min<size_t>(9, candidates_.size()) ? index : candidates_.size();
+    const int row = MulDiv(style_.row_height, scale, 96);
+    const int padding = MulDiv(style_.padding, scale, 96);
+    const size_t row_count = std::min<size_t>(9, candidates_.size());
+    return CandidateWindowRowIndexAtY(y, row, padding, row_count);
 }
 
 void CandidateWindow::Paint(HDC dc) {
@@ -242,11 +317,21 @@ void CandidateWindow::Paint(HDC dc) {
     HBRUSH background = CreateSolidBrush(style_.background);
     HBRUSH border = CreateSolidBrush(style_.border);
     if (background) {
-        FillRect(dc, &rect, background);
+        const int radius = MulDiv(style_.corner_radius, DpiForWindow(window_), 96);
+        HGDIOBJ old_brush = SelectObject(dc, background);
+        RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, radius * 2, radius * 2);
+        SelectObject(dc, old_brush);
         DeleteObject(background);
     }
     if (border) {
-        FrameRect(dc, &rect, border);
+        const int radius = MulDiv(style_.corner_radius, DpiForWindow(window_), 96);
+        HGDIOBJ old_brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
+        HPEN pen = CreatePen(PS_SOLID, 1, style_.border);
+        HGDIOBJ old_pen = pen ? SelectObject(dc, pen) : nullptr;
+        RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, radius * 2, radius * 2);
+        if (old_pen) SelectObject(dc, old_pen);
+        if (pen) DeleteObject(pen);
+        SelectObject(dc, old_brush);
         DeleteObject(border);
     }
 
@@ -256,48 +341,15 @@ void CandidateWindow::Paint(HDC dc) {
     HGDIOBJ old = SelectObject(dc, font);
 
     const int scale = DpiForWindow(window_);
-    const int header = MulDiv(style_.header_height, scale, 96);
-        const int row = MulDiv(style_.row_height, scale, 96);
-        const int padding = MulDiv(style_.padding, scale, 96);
+    const int row = MulDiv(style_.row_height, scale, 96);
+    const int padding = MulDiv(style_.padding, scale, 96);
     RECT line = rect;
     line.left += padding;
     line.top += padding;
     line.right -= padding;
-    line.bottom = line.top + header;
-    const unsigned int page_count = page_size_ ? (total_candidates_ + page_size_ - 1) / page_size_ : 0;
-    std::wstring title = L"编码: " + pending_ + L"  " + std::to_wstring(page_index_ + 1) +
-                         L"/" + std::to_wstring(page_count);
-    DrawTextW(dc, title.c_str(), -1, &line, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
+    line.bottom = line.top + row;
 
-    // The host owns the real composition caret.  This window is an additional
-    // IME-owned view, so mirror that same core cursor here as a plain vertical
-    // marker in the encoding text (not a second editing cursor).
-    const size_t cursor_chars = std::min<size_t>(cursor_, pending_.size());
-    const std::wstring cursor_prefix = L"编码: " + pending_.substr(0, cursor_chars);
-    SIZE prefix_size{};
-    if (caret_visible_ && GetTextExtentPoint32W(dc, cursor_prefix.c_str(),
-                                                static_cast<int>(cursor_prefix.size()), &prefix_size)) {
-        const int caret_x = line.left + prefix_size.cx + MulDiv(1, scale, 96);
-        const int caret_w = std::max(1, MulDiv(1, scale, 96));
-        const int caret_top = line.top + MulDiv(5, scale, 96);
-        const int caret_bottom = line.bottom - MulDiv(5, scale, 96);
-        HBRUSH caret_brush = CreateSolidBrush(style_.caret);
-        HPEN caret_pen = CreatePen(PS_SOLID, 1, style_.caret);
-        if (caret_brush && caret_pen) {
-            RECT caret_rect{caret_x, caret_top, caret_x + caret_w, caret_bottom};
-            HGDIOBJ old_pen = SelectObject(dc, caret_pen);
-            HGDIOBJ old_brush = SelectObject(dc, caret_brush);
-            Rectangle(dc, caret_rect.left, caret_rect.top, caret_rect.right, caret_rect.bottom);
-            SelectObject(dc, old_brush);
-            SelectObject(dc, old_pen);
-        }
-        if (caret_brush) DeleteObject(caret_brush);
-        if (caret_pen) DeleteObject(caret_pen);
-    }
-
-    line.top += header;
     if (candidates_.empty()) {
-        line.bottom = line.top + row;
         SetTextColor(dc, style_.text);
         DrawTextW(dc, L"无候选（可继续输入或退格）", -1, &line,
                   DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
@@ -308,15 +360,48 @@ void CandidateWindow::Paint(HDC dc) {
             RECT selection = line;
             HBRUSH selection_brush = CreateSolidBrush(style_.selection_background);
             if (selection_brush) {
-                FillRect(dc, &selection, selection_brush);
+                const int radius = MulDiv(style_.corner_radius, scale, 96);
+                HGDIOBJ old_brush = SelectObject(dc, selection_brush);
+                RoundRect(dc, selection.left, selection.top, selection.right, selection.bottom,
+                          radius * 2, radius * 2);
+                SelectObject(dc, old_brush);
                 DeleteObject(selection_brush);
             }
-            SetTextColor(dc, style_.selection_text);
-        } else {
-            SetTextColor(dc, style_.text);
         }
-        const std::wstring item = std::to_wstring(i + 1) + L". " + candidates_[i];
-        DrawTextW(dc, item.c_str(), -1, &line, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
+        const int badge_size = std::max(18, row - MulDiv(10, scale, 96));
+        RECT badge{line.left + MulDiv(2, scale, 96),
+                   line.top + (row - badge_size) / 2,
+                   line.left + MulDiv(2, scale, 96) + badge_size,
+                   line.top + (row - badge_size) / 2 + badge_size};
+        HBRUSH badge_brush = CreateSolidBrush(i == selected_index_ ? style_.selection_text : style_.number_background);
+        if (badge_brush) {
+            const int radius = badge_size / 2;
+            HGDIOBJ old_brush = SelectObject(dc, badge_brush);
+            RoundRect(dc, badge.left, badge.top, badge.right, badge.bottom, radius, radius);
+            SelectObject(dc, old_brush);
+            DeleteObject(badge_brush);
+        }
+        SetTextColor(dc, i == selected_index_ ? style_.background : style_.number_text);
+        const std::wstring number = std::to_wstring(i + 1);
+        DrawTextW(dc, number.c_str(), -1, &badge, DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+
+        const int text_left = badge.right + MulDiv(10, scale, 96);
+        const std::wstring& item = candidates_[i];
+        const size_t annotation_start = item.find(L"  [");
+        const std::wstring word = annotation_start == std::wstring::npos ? item : item.substr(0, annotation_start);
+        const std::wstring annotation = annotation_start == std::wstring::npos ? L"" : item.substr(annotation_start);
+        RECT text_line = line;
+        text_line.left = text_left;
+        SetTextColor(dc, i == selected_index_ ? style_.selection_text : style_.text);
+        DrawTextW(dc, word.c_str(), -1, &text_line, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+        if (!annotation.empty()) {
+            SIZE word_size{};
+            GetTextExtentPoint32W(dc, word.c_str(), static_cast<int>(word.size()), &word_size);
+            text_line.left += word_size.cx + MulDiv(8, scale, 96);
+            SetTextColor(dc, style_.annotation);
+            DrawTextW(dc, annotation.c_str(), -1, &text_line,
+                      DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+        }
         line.top += row;
     }
 

@@ -1545,7 +1545,8 @@ bool HeshunTextService::IsHandledKey(WPARAM key) const {
     if (key == VK_RETURN || key == VK_SPACE) return HasPending();
     if (key == VK_LEFT || key == VK_RIGHT) return HasPending();
     if (key == VK_ESCAPE || key == VK_PRIOR || key == VK_NEXT || key == VK_UP || key == VK_DOWN) return true;
-    return key >= '1' && key <= '9';
+    if (HasPending() && CandidateIndexFromNumberKey(key, candidates_.size()) >= 0) return true;
+    return false;
 }
 
 bool HeshunTextService::FeedKey(WPARAM key, std::string& committed) {
@@ -1587,9 +1588,11 @@ bool HeshunTextService::FeedKey(WPARAM key, std::string& committed) {
         return true;
     }
     if (key >= '1' && key <= '9') {
-        const size_t row = static_cast<size_t>(key - '1');
-        if (row < candidates_.size()) DispatchRuntime(6, 0, candidates_[row].key);
-        committed = last_committed_;
+        const int row = CandidateIndexFromNumberKey(key, candidates_.size());
+        if (row < 0) return false;
+        if (DispatchRuntime(6, 0, candidates_[static_cast<size_t>(row)].key)) {
+            committed = last_committed_;
+        }
         return true;
     }
     return false;
