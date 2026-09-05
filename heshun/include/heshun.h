@@ -35,7 +35,9 @@ typedef struct hs_runtime_result {
     unsigned int composition;
     hs_text_view committed;
     hs_text_view pending;
+    hs_text_view preedit;
     unsigned int cursor;
+    unsigned int preedit_cursor;
     const hs_candidate_view* candidates;
     unsigned int candidate_count;
     unsigned int page_index;

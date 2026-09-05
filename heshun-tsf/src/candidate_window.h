@@ -66,6 +66,11 @@ inline int CandidateWindowContentHeight(size_t row_count, int row_height, int pa
     return static_cast<int>(std::max<size_t>(1, row_count)) * row_height + padding * 2;
 }
 
+inline bool ShouldShowCandidateWindow(bool has_runtime, bool has_pending,
+                                      size_t candidate_count) {
+    return has_runtime && has_pending && candidate_count > 0;
+}
+
 inline size_t CandidateWindowRowIndexAtY(int y, int row_height, int padding,
                                          size_t row_count) {
     if (y < padding || row_height <= 0) return row_count;

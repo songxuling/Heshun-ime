@@ -1161,6 +1161,7 @@ bool HeshunTextService::LoadEngine() {
     runtime_degraded_ = false;
     next_runtime_retry_tick_ = 0;
     pending_.clear();
+    raw_pending_.clear();
     candidates_.clear();
     page_index_ = 0;
     total_candidates_ = 0;
@@ -1207,8 +1208,9 @@ bool HeshunTextService::DispatchRuntime(unsigned int opcode, long long value, Ca
     if (!view) { hs_runtime_result_free(result); return false; }
 
     last_committed_ = Utf8ViewToString(view->committed);
-    pending_ = Utf8ViewToUtf16(view->pending);
-    cursor_ = std::min<unsigned int>(view->cursor, static_cast<unsigned int>(pending_.size()));
+    raw_pending_ = Utf8ViewToUtf16(view->pending);
+    pending_ = Utf8ViewToUtf16(view->preedit);
+    cursor_ = std::min<unsigned int>(view->preedit_cursor, static_cast<unsigned int>(pending_.size()));
     candidates_.clear();
     for (unsigned int i = 0; i < view->candidate_count; ++i) {
         const hs_candidate_view& candidate = view->candidates[i];
@@ -1395,6 +1397,7 @@ void HeshunTextService::FreeEngine() {
     if (candidate_window_) candidate_window_->Hide();
     if (runtime_) { hs_runtime_free(runtime_); runtime_ = nullptr; }
     pending_.clear();
+    raw_pending_.clear();
     candidates_.clear();
     page_index_ = 0;
     total_candidates_ = 0;
@@ -1448,10 +1451,15 @@ HRESULT HeshunTextService::CancelComposition(ITfContext* context) {
 }
 
 void HeshunTextService::UpdateCandidateWindow() {
-    if (!runtime_ || pending_.empty()) {
+    // Match librime Context::HasMenu(): an active composition without a
+    // translation must keep its preedit editable, but must not create a
+    // candidate UI containing a fake "no candidates" row.
+    if (!ShouldShowCandidateWindow(runtime_ != nullptr, !pending_.empty(), candidates_.size())) {
         if (candidate_list_) candidate_list_->End();
         if (candidate_window_) candidate_window_->Hide();
-        Trace("CandidateWindow: hidden");
+        Trace(candidates_.empty() && !pending_.empty()
+                  ? "CandidateWindow: hidden (no candidates)"
+                  : "CandidateWindow: hidden");
         return;
     }
     std::vector<std::wstring> candidates;
@@ -1573,12 +1581,12 @@ bool HeshunTextService::FeedKey(WPARAM key, std::string& committed) {
         TraceSelectionKey(key);
         DispatchRuntime(key == VK_RETURN ? 5 : 4);
         committed = last_committed_;
-        if (committed.empty() && !pending_.empty()) {
+        if (committed.empty() && !raw_pending_.empty()) {
             // 没有候选时，Space/Enter 按输入法收尾语义提交当前预编辑原文。
-            const int needed = WideCharToMultiByte(CP_UTF8, 0, pending_.data(), static_cast<int>(pending_.size()), nullptr, 0, nullptr, nullptr);
+            const int needed = WideCharToMultiByte(CP_UTF8, 0, raw_pending_.data(), static_cast<int>(raw_pending_.size()), nullptr, 0, nullptr, nullptr);
             if (needed > 0) {
                 std::string utf8(static_cast<size_t>(needed), '\0');
-                if (WideCharToMultiByte(CP_UTF8, 0, pending_.data(), static_cast<int>(pending_.size()), utf8.data(), needed, nullptr, nullptr)) {
+                if (WideCharToMultiByte(CP_UTF8, 0, raw_pending_.data(), static_cast<int>(raw_pending_.size()), utf8.data(), needed, nullptr, nullptr)) {
                     committed = std::move(utf8);
                 }
             }

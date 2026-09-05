@@ -45,11 +45,13 @@ int main() {
     if (CandidateIndexFromNumberKey('0', 9) != -1) return 13;
     if (CandidateIndexFromNumberKey(VK_NUMPAD1, 9) != -1) return 14;
     if (CandidateWindowContentHeight(9, 25, 8) != 241) return 15;
+    if (ShouldShowCandidateWindow(true, true, 1) != true) return 25;
+    if (ShouldShowCandidateWindow(true, true, 0) != false) return 26;
+    if (ShouldShowCandidateWindow(true, false, 1) != false) return 27;
     if (CandidateWindowRowIndexAtY(8, 25, 8, 9) != 0) return 16;
     if (CandidateWindowRowIndexAtY(32, 25, 8, 9) != 0) return 17;
     if (CandidateWindowRowIndexAtY(33, 25, 8, 9) != 1) return 18;
     if (CandidateWindowRowIndexAtY(233, 25, 8, 9) != 9) return 19;
-
     if (CandidateWindowContentHeight(9, 30, 10) != 290) return 20;
     if (DynamicCandidateClientWidth(80, 30, 10, 180, 700) != 180) return 21;
     if (DynamicCandidateClientWidth(320, 30, 10, 180, 700) != 360) return 22;

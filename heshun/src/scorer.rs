@@ -15,13 +15,22 @@ pub struct BasicScorer {
 
 impl Default for BasicScorer {
     fn default() -> Self {
-        Self { word_count_penalty: 0.15, length_bonus: 0.08, sentence_end_bonus: 0.0 }
+        // Match librime's default dictionary/grammar scale.  librime stores
+        // log(raw_weight) in compiled dictionary entries, subtracts log(1e8)
+        // while exposing an entry, then applies log(1e-6) when no grammar
+        // model is installed.  Heshun retains raw weights, so apply the
+        // combined per-word normalization here.
+        Self {
+            word_count_penalty: 100_000_000_000_000.0_f64.ln(),
+            length_bonus: 0.0,
+            sentence_end_bonus: 0.0,
+        }
     }
 }
 
 impl CandidateScorer for BasicScorer {
     fn score_word(&self, _previous_word: Option<&str>, word: &str, weight: u32, is_sentence_end: bool) -> f64 {
-        (weight as f64 + 1.0).ln()
+        (if weight == 0 { f64::EPSILON } else { weight as f64 }).ln()
             + self.length_bonus * word.chars().count() as f64
             - self.word_count_penalty
             + if is_sentence_end { self.sentence_end_bonus } else { 0.0 }
@@ -44,8 +53,15 @@ mod tests {
 
     #[test]
     fn basic_score_is_log_weight_and_length_aware() {
-        let scorer = BasicScorer::default();
+        let scorer = BasicScorer { length_bonus: 0.08, ..BasicScorer::default() };
         assert!(scorer.score_word(None, "中国", 100, false) > scorer.score_word(None, "中", 100, false));
+    }
+
+    #[test]
+    fn basic_score_uses_rime_log_frequency_scale() {
+        let scorer = BasicScorer::default();
+        let expected = 100.0_f64.ln() - 100_000_000_000_000.0_f64.ln();
+        assert!((scorer.score_word(None, "中", 100, false) - expected).abs() < 1e-12);
     }
 
     #[test]

@@ -252,6 +252,15 @@ impl Engine {
     pub fn is_table(&self) -> bool {
         matches!(self.schema, SchemaKind::Table { .. })
     }
+
+    /// Returns a display-only preedit and caret position while preserving the
+    /// caller's raw editing buffer for key processing and dictionary lookup.
+    pub fn format_preedit(&self, input: &str, cursor: usize) -> (String, usize) {
+        match &self.schema {
+            SchemaKind::Script { dict } => dict.format_preedit(input, cursor),
+            SchemaKind::Table { .. } => (input.to_string(), cursor),
+        }
+    }
 }
 
 // ── 会话 ──────────────────────────────────────────────
@@ -328,7 +337,7 @@ impl<'a> Session<'a> {
             .unwrap_or(self.buf.len());
         self.buf.insert(byte, ch);
         self.cursor += 1;
-        self.sentence_cands.clear();
+        self.refresh_sentence_candidates();
         self.sentence_offset = 0;
         FeedResult::Waiting
     }
@@ -698,23 +707,7 @@ impl<'a> Session<'a> {
             return FeedResult::Rejected;
         }
 
-        let user_dict = self.engine.user_dict.borrow();
-        let ranked = crate::word_graph::beam_search_with_user_context(
-            &input,
-            dict,
-            user_dict.as_ref(),
-            self.preceding_word.as_deref(),
-            9,
-            9,
-            &BasicScorer::default(),
-        );
-        self.sentence_cands = ranked
-            .into_iter()
-            .map(|sentence| SentenceCandidate {
-                words: sentence.words,
-                score: sentence.score.max(0.0).round() as u32,
-            })
-            .collect();
+        self.refresh_sentence_candidates_for(dict, &input);
         self.sentence_offset = 0;
 
         if exact.is_empty() && prefix.is_empty() && self.sentence_cands.is_empty() {
@@ -787,7 +780,6 @@ impl<'a> Session<'a> {
 
     /// 退格。
     pub fn backspace(&mut self) -> bool {
-        self.sentence_cands.clear();
         if self.cursor == 0 && !self.buf.is_empty() {
             // `feed` is the low-level append API; keep direct callers' caret
             // at the end so backspace behaves like Rime's editor.
@@ -810,6 +802,7 @@ impl<'a> Session<'a> {
             .unwrap_or(self.buf.len());
         self.buf.replace_range(start..end, "");
         self.cursor -= 1;
+        self.refresh_sentence_candidates();
         true
     }
 
@@ -830,6 +823,45 @@ impl<'a> Session<'a> {
             self.cursor = 0;
             Some(std::mem::take(&mut self.buf))
         }
+    }
+
+    /// 重新查询当前拼音组合的句子候选。
+    ///
+    /// librime 在 composition 发生编辑后会重新生成 translation；如果
+    /// 只清空旧缓存而不重建，退格后候选窗口会错误地变为空。
+    fn refresh_sentence_candidates(&mut self) {
+        let input = self.normalized_input();
+        let Some(dict) = (match &self.engine.schema {
+            SchemaKind::Script { dict } => Some(dict),
+            SchemaKind::Table { .. } => None,
+        }) else {
+            self.sentence_cands.clear();
+            return;
+        };
+        self.refresh_sentence_candidates_for(dict, &input);
+    }
+
+    fn refresh_sentence_candidates_for(&mut self, dict: &PinyinDict, input: &str) {
+        if input.is_empty() {
+            self.sentence_cands.clear();
+            return;
+        }
+        let user_dict = self.engine.user_dict.borrow();
+        self.sentence_cands = crate::word_graph::beam_search_with_user_context(
+            input,
+            dict,
+            user_dict.as_ref(),
+            self.preceding_word.as_deref(),
+            9,
+            9,
+            &BasicScorer::default(),
+        )
+        .into_iter()
+        .map(|sentence| SentenceCandidate {
+            words: sentence.words,
+            score: sentence.score.max(0.0).round() as u32,
+        })
+        .collect();
     }
 }
 
@@ -960,8 +992,11 @@ user_dict:
         Engine::new(SchemaKind::Script {
             dict: PinyinDict::from_entries(vec![
                 ("wo".into(), "我".into(), 100),
+                ("ai".into(), "爱".into(), 90),
+                ("ni".into(), "你".into(), 100),
                 ("zhong".into(), "中".into(), 100),
                 ("zhong".into(), "钟".into(), 80),
+                ("wo ai ni".into(), "我爱你".into(), 95),
                 ("zhong guo".into(), "中国".into(), 95),
                 ("guo".into(), "国".into(), 90),
                 ("guo".into(), "过".into(), 70),
@@ -1064,5 +1099,33 @@ user_dict:
         assert_eq!(s.pending(), "w");
         s.clear();
         assert_eq!(s.pending(), "");
+    }
+
+    #[test]
+    fn backspace_rebuilds_candidates_after_long_unmatched_input() {
+        let e = script_engine();
+        let mut s = e.session();
+        for ch in "woainizhongguox".chars() {
+            s.feed(ch);
+        }
+        assert!(s.candidates(9).is_empty());
+
+        assert!(s.backspace());
+        assert_eq!(s.pending(), "woainizhongguo");
+        let candidates = s.candidates(9);
+        assert!(!candidates.is_empty());
+        assert_eq!(candidates[0].word, "我爱你中国");
+    }
+
+    #[test]
+    fn incomplete_tail_syllable_keeps_sentence_candidates_visible() {
+        let e = script_engine();
+        let mut s = e.session();
+        for ch in "woainizhon".chars() {
+            s.feed(ch);
+        }
+        let candidates = s.candidates(9);
+        assert!(!candidates.is_empty());
+        assert_eq!(candidates[0].word, "我爱你中");
     }
 }

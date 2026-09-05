@@ -141,6 +141,33 @@ impl SyllableGraph {
         }
         edges.retain(|edge| reachable[edge.start]);
         farthest = (0..=n).rfind(|&position| reachable[position]).unwrap_or(0);
+
+        // Match librime's Syllabifier completion pass: if the reachable graph
+        // stops at an unfinished final syllable, consume that tail with a
+        // completion edge and query the corresponding complete syllable code.
+        if farthest < n {
+            let tail = &normalized[farthest..];
+            for code in dict.complete_syllables(tail) {
+                edges.push(SyllableEdge {
+                    start: farthest,
+                    end: n,
+                    code,
+                    properties: EdgeProperties {
+                        spelling_type: SpellingType::Completion,
+                        credibility: -300,
+                        original_start: original_ranges.get(farthest).map(|r| r.0).unwrap_or(0),
+                        original_end: original_ranges.last().map(|r| r.1).unwrap_or(0),
+                    },
+                });
+            }
+            if edges.iter().any(|edge| {
+                edge.start == farthest
+                    && edge.end == n
+                    && edge.properties.spelling_type == SpellingType::Completion
+            }) {
+                farthest = n;
+            }
+        }
         edges.sort_by_key(|edge| (edge.start, edge.end, edge.code.clone()));
         edges.dedup_by(|a, b| a.start == b.start && a.end == b.end && a.code == b.code);
         Self {
@@ -207,9 +234,25 @@ mod tests {
 
     #[test]
     fn graph_can_add_completion_edges() {
-        let graph = SyllableGraph::build_with_options("zhon", &dict(), true);
+        let graph = SyllableGraph::build("zhon", &dict());
         assert!(graph.edges.iter().any(|edge| {
             edge.code == "zhong" && edge.properties.spelling_type == SpellingType::Completion
+        }));
+    }
+
+    #[test]
+    fn graph_completes_tail_after_multiple_syllables() {
+        let dict = PinyinDict::from_entries(vec![
+            ("wo".into(), "我".into(), 100),
+            ("ai".into(), "爱".into(), 100),
+            ("ni".into(), "你".into(), 100),
+            ("zhong".into(), "中".into(), 100),
+        ]);
+        let graph = SyllableGraph::build("woainizhon", &dict);
+        assert_eq!(graph.interpreted_length, "woainizhon".len());
+        assert!(graph.edges.iter().any(|edge| {
+            edge.start == 6 && edge.end == 10 && edge.code == "zhong"
+                && edge.properties.spelling_type == SpellingType::Completion
         }));
     }
 }

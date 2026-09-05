@@ -19,7 +19,11 @@ pub struct RankedSentence {
     pub score: f64,
 }
 
-const SENTENCE_CUTOFF: f64 = 8.0;
+// The score now uses librime's per-word log-frequency normalization.  Its
+// absolute values are therefore roughly 32 points lower per word than the
+// old heuristic score; retain a comparably wide candidate window instead of
+// discarding valid alternatives solely because of that shared offset.
+const SENTENCE_CUTOFF: f64 = 64.0;
 
 pub fn build_word_graph(input: &str, dict: &PinyinDict, per_code_limit: usize) -> Vec<WordEdge> {
     let graph = SyllableGraph::build(input, dict);
@@ -218,5 +222,17 @@ mod tests {
         scorer.insert("前", "乙", 10.0);
         let result = beam_search_with_user_context("a", &dict, None, Some("前"), 2, 4, &scorer);
         assert_eq!(result[0].words, vec!["乙"]);
+    }
+
+    #[test]
+    fn sentence_scoring_prefers_phrase_boundaries_like_librime() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("schemas")
+            .join("pinyin_simp.bin");
+        let data = std::fs::read(path).expect("仓库拼音字典必须存在");
+        let dict = PinyinDict::load(&data).expect("仓库拼音字典必须可加载");
+
+        let result = default_beam_search("woainizhongguo", &dict, 9);
+        assert_eq!(result[0].words, vec!["我爱你", "中国"]);
     }
 }

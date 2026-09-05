@@ -166,6 +166,8 @@ pub struct ContextSnapshot {
     pub confirmed_text: String,
     pub pending: String,
     pub cursor: usize,
+    pub preedit: String,
+    pub preedit_cursor: usize,
     pub candidates: CandidatePage,
     pub status: RuntimeStatus,
 }
@@ -779,6 +781,11 @@ impl CoreRuntime {
         let start = (self.state.page_index * self.page_size).min(total);
         let end = (start + self.page_size).min(total);
         let items = all[start..end].to_vec();
+        let (preedit, preedit_cursor) = self
+            .store
+            .get(&self.state.schema)
+            .map(|engine| engine.format_preedit(&self.state.pending, self.state.cursor))
+            .unwrap_or_else(|| (self.state.pending.clone(), self.state.cursor));
         let selected = self
             .state
             .selected
@@ -789,6 +796,8 @@ impl CoreRuntime {
             confirmed_text: self.state.confirmed_text.clone(),
             pending: self.state.pending.clone(),
             cursor: self.state.cursor,
+            preedit,
+            preedit_cursor,
             candidates: CandidatePage {
                 items,
                 page_index: self.state.page_index,
@@ -939,6 +948,29 @@ mod tests {
                 .any(|item| item.key.source == CandidateSource::ScriptSentence),
             "组句候选必须保留 ScriptSentence 来源"
         );
+    }
+
+    #[test]
+    fn script_snapshot_exposes_syllable_separated_preedit() {
+        let mut store = EngineStore::new();
+        store.insert(
+            "script",
+            Engine::new(SchemaKind::Script {
+                dict: PinyinDict::from_entries(vec![
+                    ("ren".into(), "人".into(), 100),
+                    ("jian".into(), "间".into(), 100),
+                    ("zheng".into(), "正".into(), 100),
+                ]),
+            }),
+        );
+        let mut runtime = CoreRuntime::new(Arc::new(store), "script").unwrap();
+        for ch in "renjianzhengd".chars() {
+            runtime.dispatch(InputEvent::Text(ch));
+        }
+        let snapshot = runtime.snapshot();
+        assert_eq!(snapshot.pending, "renjianzhengd");
+        assert_eq!(snapshot.preedit, "ren'jian'zheng'd");
+        assert_eq!(snapshot.preedit_cursor, snapshot.preedit.chars().count());
     }
 
     #[test]

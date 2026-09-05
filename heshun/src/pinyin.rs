@@ -43,6 +43,7 @@ pub struct PinyinDict {
     codes: Vec<String>,   // 连续拼音（已去空格），升序
     words: Vec<String>,
     weights: Vec<u32>,
+    syllables: HashSet<String>,
     zrm: Option<ZrmMap>,
 }
 
@@ -65,7 +66,13 @@ impl PinyinDict {
             words.push(word);
             weights.push(weight);
         }
-        PinyinDict { codes, words, weights, zrm: None }
+        let syllables = codes
+            .iter()
+            .zip(words.iter())
+            .filter(|(_, word)| word.chars().count() == 1)
+            .map(|(code, _)| code.clone())
+            .collect();
+        PinyinDict { codes, words, weights, syllables, zrm: None }
     }
 
     /// 附加双拼反向映射。
@@ -81,6 +88,47 @@ impl PinyinDict {
 
     pub fn entry_count(&self) -> usize {
         self.codes.len()
+    }
+
+    /// Format raw full-Pinyin input for display without changing the editing
+    /// buffer.  Like librime's Syllabifier, use the dictionary's syllabary
+    /// rather than word boundaries: codes which have a single-character entry
+    /// are valid syllables, while multi-character phrase codes are not used as
+    /// display separators.
+    pub fn format_preedit(&self, input: &str, cursor: usize) -> (String, usize) {
+        let normalized = normalize_pinyin(input);
+        let mut output = String::new();
+        let mut position = 0usize;
+        let mut display_cursor = 0usize;
+        let cursor = cursor.min(input.chars().count());
+        let raw_prefix_len = input.chars().take(cursor).map(char::len_utf8).sum::<usize>();
+        while position < normalized.len() {
+            let mut best_end = None;
+            for end in (position + 1..=normalized.len()).rev() {
+                if self.syllables.contains(&normalized[position..end]) {
+                    best_end = Some(end);
+                    break;
+                }
+            }
+            let end = best_end.unwrap_or(normalized.len());
+            if !output.is_empty() {
+                output.push('\'');
+            }
+            if position < raw_prefix_len {
+                display_cursor = output.chars().count();
+            }
+            output.push_str(&normalized[position..end]);
+            if end <= raw_prefix_len {
+                display_cursor = output.chars().count();
+            }
+            position = end;
+        }
+        if normalized.is_empty() {
+            display_cursor = 0;
+        } else if raw_prefix_len >= normalized.len() {
+            display_cursor = output.chars().count();
+        }
+        (output, display_cursor)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -138,6 +186,23 @@ impl PinyinDict {
                 )
             })
             .collect()
+    }
+
+    /// Complete syllables beginning with an unfinished full-Pinyin prefix.
+    /// This mirrors librime's Prism::ExpandSearch for the final tail.
+    pub fn complete_syllables(&self, prefix: &str) -> Vec<String> {
+        let prefix = normalize_pinyin(prefix);
+        if prefix.is_empty() {
+            return Vec::new();
+        }
+        let mut result: Vec<String> = self
+            .syllables
+            .iter()
+            .filter(|syllable| syllable.starts_with(&prefix))
+            .cloned()
+            .collect();
+        result.sort();
+        result
     }
 
     /// 组句用：找出所有「连续拼音 == input 的某段」的词条。
@@ -337,7 +402,13 @@ impl PinyinDict {
             }
         }
 
-        Ok(PinyinDict { codes, words, weights, zrm })
+        let syllables = codes
+            .iter()
+            .zip(words.iter())
+            .filter(|(_, word)| word.chars().count() == 1)
+            .map(|(code, _)| code.clone())
+            .collect();
+        Ok(PinyinDict { codes, words, weights, syllables, zrm })
     }
 }
 
@@ -471,6 +542,17 @@ mod tests {
             ("zhong guo".into(), "中国".into(), 200),
         ]);
         assert!(d.abbreviation("zg", 9).iter().any(|c| c.word == "中国"));
+    }
+
+    #[test]
+    fn format_preedit_separates_syllables_without_changing_input() {
+        let d = PinyinDict::from_entries(vec![
+            ("ren".into(), "人".into(), 100),
+            ("jian".into(), "间".into(), 100),
+            ("zheng".into(), "正".into(), 100),
+        ]);
+        assert_eq!(d.format_preedit("renjianzhengd", 13), ("ren'jian'zheng'd".into(), 16));
+        assert_eq!(normalize_pinyin("ren'jian'zheng'd"), "renjianzhengd");
     }
 
     #[test]

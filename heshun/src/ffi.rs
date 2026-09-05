@@ -38,7 +38,9 @@ pub struct HsRuntimeResult {
     pub composition: u32,
     pub committed: HsTextView,
     pub pending: HsTextView,
+    pub preedit: HsTextView,
     pub cursor: u32,
+    pub preedit_cursor: u32,
     pub candidates: *const HsCandidateView,
     pub candidate_count: u32,
     pub page_index: u32,
@@ -66,6 +68,7 @@ struct RuntimeResultOwner {
     result: HsRuntimeResult,
     _committed: CString,
     _pending: CString,
+    _preedit: CString,
     candidates: Vec<HsCandidateView>,
     candidate_text: Vec<(Box<CString>, Box<CString>, Box<CString>)>,
 }
@@ -82,11 +85,13 @@ fn runtime_result(result: crate::core::CommandResult) -> *mut c_void {
     let snapshot = result.snapshot;
     let committed = CString::new(result.committed.unwrap_or_default()).unwrap_or_default();
     let pending = CString::new(snapshot.pending).unwrap_or_default();
+    let preedit = CString::new(snapshot.preedit).unwrap_or_default();
     let mut owner = Box::new(RuntimeResultOwner {
         result: HsRuntimeResult {
             disposition: match result.disposition { EventDisposition::Consumed => 1, EventDisposition::PassedThrough => 0 },
             composition: match result.composition { crate::core::CompositionAction::Keep => 0, crate::core::CompositionAction::Update => 1, crate::core::CompositionAction::End => 2 },
-            committed: text_view(&committed), pending: text_view(&pending), cursor: snapshot.cursor as u32, candidates: ptr::null(),
+            committed: text_view(&committed), pending: text_view(&pending), preedit: text_view(&preedit),
+            cursor: snapshot.cursor as u32, preedit_cursor: snapshot.preedit_cursor as u32, candidates: ptr::null(),
             candidate_count: 0, page_index: snapshot.candidates.page_index as u32,
             page_size: snapshot.candidates.page_size as u32, total_candidates: snapshot.candidates.total as u32,
             selected_source: snapshot.candidates.selected.map(|key| key.source as u32).unwrap_or(0),
@@ -96,7 +101,8 @@ fn runtime_result(result: crate::core::CommandResult) -> *mut c_void {
             composing: snapshot.status.composing as u8,
             error_code: if result.error.is_some() { 1 } else { 0 },
         },
-        _committed: committed, _pending: pending, candidates: Vec::new(), candidate_text: Vec::new(),
+        _committed: committed, _pending: pending, _preedit: preedit,
+        candidates: Vec::new(), candidate_text: Vec::new(),
     });
     for candidate in snapshot.candidates.items {
         let word = Box::new(CString::new(candidate.word).unwrap_or_default());

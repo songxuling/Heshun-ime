@@ -188,6 +188,7 @@ private:
         std::wstring label;
     };
     std::wstring pending_;
+    std::wstring raw_pending_;
     std::vector<RuntimeCandidate> candidates_;
     unsigned int page_index_ = 0;
     unsigned int page_size_ = 9;
