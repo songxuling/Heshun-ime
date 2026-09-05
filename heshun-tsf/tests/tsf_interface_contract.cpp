@@ -52,10 +52,14 @@ int main() {
     if (CandidateWindowRowIndexAtY(32, 25, 8, 9) != 0) return 17;
     if (CandidateWindowRowIndexAtY(33, 25, 8, 9) != 1) return 18;
     if (CandidateWindowRowIndexAtY(233, 25, 8, 9) != 9) return 19;
-    if (CandidateWindowContentHeight(9, 30, 10) != 290) return 20;
-    if (DynamicCandidateClientWidth(80, 30, 10, 180, 700) != 180) return 21;
-    if (DynamicCandidateClientWidth(320, 30, 10, 180, 700) != 360) return 22;
-    if (DynamicCandidateClientWidth(800, 30, 10, 180, 1200) != 840) return 23;
-    if (DynamicCandidateClientWidth(1400, 30, 10, 180, 1200) != 1200) return 24;
+    if (!CandidateWindowHasPage(0, 9, 10, 1)) return 20;
+    if (CandidateWindowHasPage(1, 9, 10, 1)) return 21;
+    if (CandidateWindowHasPage(0, 9, 10, -1)) return 22;
+    if (CandidateWindowHasPage(0, 0, 10, 1)) return 23;
+    if (CandidateWindowContentHeight(9, 30, 10) != 290) return 24;
+    if (DynamicCandidateClientWidth(80, 30, 10, 180, 700) != 180) return 25;
+    if (DynamicCandidateClientWidth(320, 30, 10, 180, 700) != 360) return 26;
+    if (DynamicCandidateClientWidth(800, 30, 10, 180, 1200) != 840) return 27;
+    if (DynamicCandidateClientWidth(1400, 30, 10, 180, 1200) != 1200) return 28;
     return 0;
 }

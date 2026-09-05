@@ -243,11 +243,22 @@ void CandidateWindow::SetCandidateClickHandler(std::function<void(CandidateKey)>
     candidate_click_handler_ = std::move(handler);
 }
 
+void CandidateWindow::SetPageChangeHandler(std::function<void(int)> handler) {
+    page_change_handler_ = std::move(handler);
+}
+
 void CandidateWindow::MoveSelection(int direction) {
     const size_t count = std::min<size_t>(9, candidates_.size());
     if (!count) return;
     const int next = static_cast<int>(selected_index_) + direction;
     selected_index_ = static_cast<size_t>((next % static_cast<int>(count) + static_cast<int>(count)) % static_cast<int>(count));
+    InvalidateRect(window_, nullptr, FALSE);
+}
+
+void CandidateWindow::SetSelection(size_t index) {
+    const size_t count = std::min<size_t>(9, candidates_.size());
+    if (!count) return;
+    selected_index_ = std::min(index, count - 1);
     InvalidateRect(window_, nullptr, FALSE);
 }
 
@@ -454,6 +465,23 @@ LRESULT CALLBACK CandidateWindow::WindowProc(HWND window, UINT message, WPARAM w
         self->selected_index_ = 0;
         InvalidateRect(window, nullptr, FALSE);
         return 0;
+    case WM_MOUSEWHEEL: {
+        const int direction = GET_WHEEL_DELTA_WPARAM(wparam) > 0 ? -1 : 1;
+        const size_t count = std::min<size_t>(9, self->candidates_.size());
+        if (!count) return 0;
+        const bool at_boundary = direction > 0
+            ? self->selected_index_ + 1 >= count
+            : self->selected_index_ == 0;
+        if (at_boundary) {
+            if (self->page_change_handler_) self->page_change_handler_(direction);
+        } else {
+            self->selected_index_ = static_cast<size_t>(
+                static_cast<int>(self->selected_index_) + direction);
+            self->keyboard_selection_ = false;
+            InvalidateRect(window, nullptr, FALSE);
+        }
+        return 0;
+    }
     case WM_LBUTTONUP: {
         const size_t index = self->RowAtY(GET_Y_LPARAM(lparam));
         if (index != self->candidates_.size() && self->candidate_click_handler_) {

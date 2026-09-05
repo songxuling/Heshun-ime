@@ -78,6 +78,13 @@ inline size_t CandidateWindowRowIndexAtY(int y, int row_height, int padding,
     return index < row_count ? index : row_count;
 }
 
+inline bool CandidateWindowHasPage(unsigned int page_index, unsigned int page_size,
+                                   unsigned int total_candidates, int direction) {
+    if (!page_size || direction == 0) return false;
+    const unsigned int page_count = (total_candidates + page_size - 1) / page_size;
+    return direction > 0 ? page_index + 1 < page_count : page_index > 0;
+}
+
 inline RECT CorrectCandidateAnchorRect(RECT rect, const RECT& foreground,
                                        bool has_gui_caret, POINT gui_caret,
                                        bool* corrected = nullptr) {
@@ -107,7 +114,9 @@ public:
     void SetAnchorRect(const RECT& rect);
     void ReloadStyle();
     void SetCandidateClickHandler(std::function<void(CandidateKey)> handler);
+    void SetPageChangeHandler(std::function<void(int)> handler);
     void MoveSelection(int direction);
+    void SetSelection(size_t index);
     void UseKeyboardSelection();
     size_t selected_index() const { return selected_index_; }
     bool keyboard_selection() const { return keyboard_selection_; }
@@ -120,6 +129,7 @@ private:
 
     HWND window_ = nullptr;
     std::function<void(CandidateKey)> candidate_click_handler_;
+    std::function<void(int)> page_change_handler_;
     std::wstring pending_;
     std::vector<std::wstring> candidates_;
     std::vector<CandidateKey> keys_;

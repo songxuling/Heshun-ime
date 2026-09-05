@@ -1475,6 +1475,14 @@ void HeshunTextService::UpdateCandidateWindow() {
         candidate_window_->SetCandidateClickHandler([this](CandidateKey key) {
             SelectCandidate(active_context_, key);
         });
+        candidate_window_->SetPageChangeHandler([this](int direction) {
+            if (!CandidateWindowHasPage(page_index_, page_size_, total_candidates_, direction)) return;
+            ChangeCandidatePage(direction);
+            if (candidate_window_) {
+                candidate_window_->SetSelection(direction > 0 ? 0 : 8);
+                candidate_window_->UseKeyboardSelection();
+            }
+        });
     }
     candidate_window_->Show(pending_, std::move(candidates), std::move(keys), page_index_, page_size_, total_candidates_, cursor_);
     if (candidate_list_) {
@@ -1552,7 +1560,7 @@ bool HeshunTextService::IsHandledKey(WPARAM key) const {
     if (key == VK_BACK) return HasPending();
     if (key == VK_RETURN || key == VK_SPACE) return HasPending();
     if (key == VK_LEFT || key == VK_RIGHT) return HasPending();
-    if (key == VK_ESCAPE || key == VK_PRIOR || key == VK_NEXT || key == VK_UP || key == VK_DOWN) return true;
+    if (key == VK_ESCAPE || key == VK_PRIOR || key == VK_NEXT || key == VK_HOME || key == VK_END || key == VK_UP || key == VK_DOWN) return HasPending();
     if (HasPending() && CandidateIndexFromNumberKey(key, candidates_.size()) >= 0) return true;
     return false;
 }
@@ -1571,8 +1579,31 @@ bool HeshunTextService::FeedKey(WPARAM key, std::string& committed) {
         return true;
     }
     if (key == VK_PRIOR || key == VK_NEXT) { ChangeCandidatePage(key == VK_NEXT ? 1 : -1); return true; }
+    if (key == VK_HOME || key == VK_END) {
+        const size_t count = candidate_window_ ? std::min<size_t>(9, candidates_.size()) : 0;
+        if (!count) return true;
+        candidate_window_->SetSelection(key == VK_HOME ? 0 : count - 1);
+        candidate_window_->UseKeyboardSelection();
+        Trace(key == VK_HOME ? "CandidateWindow: selection home" : "CandidateWindow: selection end");
+        return true;
+    }
     if (key == VK_UP || key == VK_DOWN) {
-        DispatchRuntime(7, key == VK_DOWN ? 1 : -1);
+        const size_t count = candidate_window_ ? std::min<size_t>(9, candidates_.size()) : 0;
+        const size_t current = candidate_window_ ? candidate_window_->selected_index() : 0;
+        const int direction = key == VK_DOWN ? 1 : -1;
+        const bool at_boundary = count &&
+            (direction > 0 ? current + 1 >= count : current == 0);
+        if (at_boundary && CandidateWindowHasPage(page_index_, page_size_, total_candidates_, direction)) {
+            ChangeCandidatePage(direction);
+            if (candidate_window_) {
+                candidate_window_->SetSelection(direction > 0 ? 0 : 8);
+                candidate_window_->UseKeyboardSelection();
+            }
+            Trace(direction > 0 ? "CandidateWindow: page next at boundary"
+                                : "CandidateWindow: page previous at boundary");
+            return true;
+        }
+        DispatchRuntime(7, direction);
         if (candidate_window_) { candidate_window_->MoveSelection(key == VK_DOWN ? 1 : -1); candidate_window_->UseKeyboardSelection(); }
         Trace(key == VK_DOWN ? "CandidateWindow: selection down" : "CandidateWindow: selection up");
         return true;
