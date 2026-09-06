@@ -1,6 +1,6 @@
 # heshun — 通用中文输入法引擎核心（全平台共享）
 
-通用输入法解码核心，支持**形码（郑码）+ 音码（全拼 / 自然码双拼）**。
+通用输入法解码核心，支持**形码（郑码）+ 音码（全拼 / 自然码、小鹤、微软、智能 ABC、拼音加加、四通双拼）**。
 Rust 编写，通过 C FFI 供各平台外壳链接：Windows TSF / macOS IMK / Linux fcitx5 / Android / iOS。
 
 ```
@@ -18,13 +18,13 @@ zhengma.bin (ZMD1)      pinyin.bin (ZPY1)
           候选 / 上屏（C FFI: zm_* 函数）
 ```
 
-## 三种方案
+## 输入方案
 
 | 方案 | 类型 | 字典 | 编译命令 | 核心机制 |
 |---|---|---|---|---|
 | 郑码6.6 | 形码 | `郑码6.6.txt`（编码\t字词） | `hs-build 郑码6.6.txt zhengma.bin` | base-27 二分前缀查表，满4码唯一自动上屏 |
 | 全拼 | 音码 | `pinyin_simp.dict.yaml`（字词\t拼音\t词频） | `hs-build --pinyin ...` | 音节分段 + 词频 DP 组句 |
-| 自然码双拼 | 音码 | 共享全拼字典 + algebra 键位映射 | `hs-build --pinyin ...` | Algebra 双拼键→全拼 → DP 组句 |
+| 自然码 / 小鹤 / 微软 / 智能 ABC / 拼音加加 / 四通双拼 | 音码 | 共享全拼字典 + Rime algebra 键位映射 | `hs-build --schema double_pinyin_*.schema.yaml` | 双拼键→全拼 → 分段图 + DP 组句 |
 
 ## 模块结构
 
@@ -58,6 +58,9 @@ hs-build 郑码6.6.txt zhengma.bin
 
 # 音码：Rime .dict.yaml → pinyin.bin（自动跳过 frontmatter，解析百分比/整数词频）
 hs-build --pinyin pinyin_simp.dict.yaml pinyin_simp.bin
+
+# 编译双拼方案（示例：自然码；其他 double_pinyin_*.schema.yaml 同理）
+hs-build --schema double_pinyin_zrm.schema.yaml
 #   ✓ 条目: 65125
 
 # 交互演示（自动识别 ZMD1/ZPY1）

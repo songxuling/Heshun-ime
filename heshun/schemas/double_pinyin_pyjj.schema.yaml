@@ -1,0 +1,47 @@
+# 拼音加加双拼方案，规则来自 rime-double-pinyin/double_pinyin_pyjj.schema.yaml
+schema:
+  schema_id: double_pinyin_pyjj
+  name: 拼音加加双拼
+  version: "0.03"
+engine:
+  type: script
+dictionary:
+  file: pinyin_pyjj.bin
+  source: pinyin_simp.dict.yaml
+speller:
+  alphabet: "zyxwvutsrqponmlkjihgfedcba"
+  algebra:
+    - erase/^xx$/
+    - derive/^([jqxy])u$/$1v/
+    - derive/^([aoe].*)$/o$1/
+    - xform/^([ae])(.*)$/$1$1$2/
+    - xform/iu$/N/
+    - xform/[iu]a$/B/
+    - xform/er$|ing$/Q/
+    - xform/[uv]an$/C/
+    - xform/[uv]e$|uai$/X/
+    - xform/^sh/I/
+    - xform/^ch/U/
+    - xform/^zh/V/
+    - xform/uo$/O/
+    - xform/[uv]n$/Z/
+    - xform/i?ong$/Y/
+    - xform/[iu]ang$/H/
+    - xform/(.)en$/$1R/
+    - xform/(.)eng$/$1T/
+    - xform/(.)ang$/$1G/
+    - xform/ian$/J/
+    - xform/(.)an$/$1F/
+    - xform/iao$/K/
+    - xform/(.)ao$/$1D/
+    - xform/(.)ai$/$1S/
+    - xform/(.)ei$/$1W/
+    - xform/ie$/M/
+    - xform/ui$/V/
+    - xform/(.)ou$/$1P/
+    - xform/in$/L/
+    - xlit/QWRTYUIOPSDFGHMJCKLZXVBN/qwrtyuiopsdfghmjcklzxvbn/
+punctuator:
+  full_shape: true
+user_dict:
+  file: ../data/double_pinyin_pyjj.userdb.json

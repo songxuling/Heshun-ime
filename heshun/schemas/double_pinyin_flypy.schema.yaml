@@ -1,0 +1,47 @@
+# 小鹤双拼方案，规则来自 rime-double-pinyin/double_pinyin_flypy.schema.yaml
+schema:
+  schema_id: double_pinyin_flypy
+  name: 小鹤双拼
+  version: "0.18"
+engine:
+  type: script
+dictionary:
+  file: pinyin_flypy.bin
+  source: pinyin_simp.dict.yaml
+speller:
+  alphabet: "zyxwvutsrqponmlkjihgfedcba"
+  algebra:
+    - erase/^xx$/
+    - derive/^([jqxy])u$/$1v/
+    - derive/^([aoe])([ioun])$/$1$1$2/
+    - xform/^([aoe])(ng)?$/$1$1$2/
+    - xform/iu$/Q/
+    - xform/(.)ei$/$1W/
+    - xform/uan$/R/
+    - xform/[uv]e$/T/
+    - xform/un$/Y/
+    - xform/^sh/U/
+    - xform/^ch/I/
+    - xform/^zh/V/
+    - xform/uo$/O/
+    - xform/ie$/P/
+    - xform/i?ong$/S/
+    - xform/ing$|uai$/K/
+    - xform/(.)ai$/$1D/
+    - xform/(.)en$/$1F/
+    - xform/(.)eng$/$1G/
+    - xform/[iu]ang$/L/
+    - xform/(.)ang$/$1H/
+    - xform/ian$/M/
+    - xform/(.)an$/$1J/
+    - xform/(.)ou$/$1Z/
+    - xform/[iu]a$/X/
+    - xform/iao$/N/
+    - xform/(.)ao$/$1C/
+    - xform/ui$/V/
+    - xform/in$/B/
+    - xlit/QWRTYUIOPSDFGHJKLZXCVBNM/qwrtyuiopsdfghjklzxcvbnm/
+punctuator:
+  full_shape: true
+user_dict:
+  file: ../data/double_pinyin_flypy.userdb.json

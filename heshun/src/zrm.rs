@@ -70,6 +70,13 @@ impl ZrmMap {
         self.keys.is_empty()
     }
 
+    /// Whether a character is used by at least one encoded double-pinyin key.
+    /// This matters for layouts such as Microsoft and Shitong, which use `;`
+    /// as a valid second key.
+    pub fn accepts_key_char(&self, ch: char) -> bool {
+        self.keys.iter().any(|key| key.chars().any(|key_ch| key_ch == ch))
+    }
+
     /// 单键 → 全拼音节。找不到返回 None。
     pub fn lookup(&self, key: &str) -> Option<&str> {
         match self.keys.binary_search(&key.to_string()) {
@@ -94,6 +101,27 @@ impl ZrmMap {
                 }
             }
             i += 2;
+        }
+        out
+    }
+
+    /// Decode a key sequence for display.  Unlike lookup conversion, the
+    /// display form keeps an unfinished final key editable instead of
+    /// silently dropping it.
+    pub fn to_pinyin_display(&self, keystrokes: &str) -> String {
+        let chars: Vec<char> = keystrokes.chars().collect();
+        let mut out = String::new();
+        let mut i = 0;
+        while i + 1 < chars.len() {
+            let key: String = chars[i..i + 2].iter().collect();
+            match self.lookup(&key) {
+                Some(py) => out.push_str(py),
+                None => out.push_str(&key),
+            }
+            i += 2;
+        }
+        if i < chars.len() {
+            out.push(chars[i]);
         }
         out
     }
@@ -214,6 +242,7 @@ mod tests {
         assert_eq!(map.to_pinyin("vsgo"), "zhongguo");
         // 奇数长度：末尾键忽略
         assert_eq!(map.to_pinyin("vs"), "zhong");
+        assert_eq!(map.to_pinyin_display("vsg"), "zhongg");
     }
 
     #[test]

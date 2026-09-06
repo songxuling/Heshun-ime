@@ -549,21 +549,25 @@ impl<'a> Session<'a> {
             }
         }
 
-        // 标点：半角→全角
-        if let Some(p) = &self.engine.punctuator {
-            let mut ctx = crate::processor::ProcessCtx::default();
-            ctx.ascii_mode = self.ascii_mode;
-            if let Some(outcome) = p.process(ch, &self.buf, &mut ctx) {
-                if let crate::processor::ProcessOutcome::Handled(r) = outcome {
-                    return r;
-                }
-            }
-        }
-
         let c = ch.to_ascii_lowercase();
         let script_delimiter = matches!(&self.engine.schema, SchemaKind::Script { .. })
             && (ch == '\'' || ch == ' ');
-        if !c.is_ascii_alphabetic() && !script_delimiter {
+        let script_key = matches!(&self.engine.schema, SchemaKind::Script { dict } if dict.zrm().map(|zrm| zrm.accepts_key_char(c)).unwrap_or(false));
+        // A layout key wins over punctuation conversion.  Microsoft and
+        // Shitong double-pinyin use `;` as a valid second key, while the
+        // punctuator would otherwise turn it into a full-width semicolon.
+        if !script_key {
+            if let Some(p) = &self.engine.punctuator {
+                let mut ctx = crate::processor::ProcessCtx::default();
+                ctx.ascii_mode = self.ascii_mode;
+                if let Some(outcome) = p.process(ch, &self.buf, &mut ctx) {
+                    if let crate::processor::ProcessOutcome::Handled(r) = outcome {
+                        return r;
+                    }
+                }
+            }
+        }
+        if !c.is_ascii_alphabetic() && !script_key && !script_delimiter {
             return FeedResult::Rejected;
         }
         match &self.engine.schema {

@@ -1,0 +1,48 @@
+# 四通双拼方案，规则来自 rime-double-pinyin/double_pinyin_st.schema.yaml
+schema:
+  schema_id: double_pinyin_st
+  name: 四通双拼
+  version: "0.1"
+engine:
+  type: script
+dictionary:
+  file: pinyin_st.bin
+  source: pinyin_simp.dict.yaml
+speller:
+  alphabet: "zyxwvutsrqponmlkjihgfedcba;"
+  initials: "zyxwvutsrqponmlkjihgfedcba"
+  algebra:
+    - erase/^xx$/
+    - derive/^([jqxy])u$/$1v/
+    - xform/^([aoe].*)$/o$1/
+    - xform/^sh/I/
+    - xform/^ch/U/
+    - xform/^zh/A/
+    - xform/er$/Q/
+    - xform/ei$/W/
+    - xform/en$/R/
+    - xform/eng$/T/
+    - xform/i?ong$/Y/
+    - xform/uo$/O/
+    - xform/ou$/P/
+    - xform/[iu]ang$/H/
+    - xform/ian$/J/
+    - xform/iao$/K/
+    - xform/in$/L/
+    - xform/ing$/;/
+    - xform/[uv]n$/Z/
+    - xform/v$|uai$/X/
+    - xform/[uv]an$/C/
+    - xform/ui$|[uv]e$/V/
+    - xform/[iu]a$/B/
+    - xform/iu$/N/
+    - xform/ie$/M/
+    - xform/ai$/S/
+    - xform/ao$/D/
+    - xform/an$/F/
+    - xform/ang$/G/
+    - xlit/QWERTYUIOPASDFGHJKLZXCVBNM/qwertyuiopasdfghjklzxcvbnm/
+punctuator:
+  full_shape: true
+user_dict:
+  file: ../data/double_pinyin_st.userdb.json

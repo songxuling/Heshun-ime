@@ -1,6 +1,6 @@
 //! heshun-gui — 通用中文输入法引擎跨平台 GUI demo
 //!
-//! 基于 egui，支持：郑码 / 全拼 / 自然码双拼 三种方案实时切换。
+//! 基于 egui，支持：郑码 / 全拼 / 多种双拼方案实时切换。
 //! 键盘输入 → 引擎 → 候选面板 → 上屏。
 
 use eframe::egui;
@@ -49,6 +49,11 @@ const SCHEMES: &[(&str, &str)] = &[
     ("zhengma66", "郑码6.6"),
     ("pinyin_full", "全拼"),
     ("double_pinyin_zrm", "自然码双拼"),
+    ("double_pinyin_flypy", "小鹤双拼"),
+    ("double_pinyin_mspy", "微软双拼"),
+    ("double_pinyin_abc", "智能ABC双拼"),
+    ("double_pinyin_pyjj", "拼音加加双拼"),
+    ("double_pinyin_st", "四通双拼"),
 ];
 
 struct App {

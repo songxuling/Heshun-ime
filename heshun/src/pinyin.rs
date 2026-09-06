@@ -96,28 +96,39 @@ impl PinyinDict {
     /// are valid syllables, while multi-character phrase codes are not used as
     /// display separators.
     pub fn format_preedit(&self, input: &str, cursor: usize) -> (String, usize) {
-        let normalized = normalize_pinyin(input);
+        let (normalized, raw_cursor_input) = if let Some(zrm) = &self.zrm {
+            (
+                zrm.to_pinyin_display(input),
+                zrm.to_pinyin_display(&input.chars().take(cursor).collect::<String>()),
+            )
+        } else {
+            (
+                normalize_pinyin(input),
+                normalize_pinyin(&input.chars().take(cursor).collect::<String>()),
+            )
+        };
         let mut output = String::new();
         let mut position = 0usize;
         let mut display_cursor = 0usize;
-        let cursor = cursor.min(input.chars().count());
-        let raw_prefix_len = input.chars().take(cursor).map(char::len_utf8).sum::<usize>();
-        while position < normalized.len() {
+        let raw_prefix_len = raw_cursor_input.chars().count();
+        let normalized_chars: Vec<char> = normalized.chars().collect();
+        while position < normalized_chars.len() {
             let mut best_end = None;
-            for end in (position + 1..=normalized.len()).rev() {
-                if self.syllables.contains(&normalized[position..end]) {
+            for end in (position + 1..=normalized_chars.len()).rev() {
+                let syllable: String = normalized_chars[position..end].iter().collect();
+                if self.syllables.contains(&syllable) {
                     best_end = Some(end);
                     break;
                 }
             }
-            let end = best_end.unwrap_or(normalized.len());
+            let end = best_end.unwrap_or(normalized_chars.len());
             if !output.is_empty() {
                 output.push('\'');
             }
             if position < raw_prefix_len {
                 display_cursor = output.chars().count();
             }
-            output.push_str(&normalized[position..end]);
+            output.extend(normalized_chars[position..end].iter());
             if end <= raw_prefix_len {
                 display_cursor = output.chars().count();
             }
@@ -125,7 +136,7 @@ impl PinyinDict {
         }
         if normalized.is_empty() {
             display_cursor = 0;
-        } else if raw_prefix_len >= normalized.len() {
+        } else if raw_prefix_len >= normalized_chars.len() {
             display_cursor = output.chars().count();
         }
         (output, display_cursor)
@@ -553,6 +564,21 @@ mod tests {
         ]);
         assert_eq!(d.format_preedit("renjianzhengd", 13), ("ren'jian'zheng'd".into(), 16));
         assert_eq!(normalize_pinyin("ren'jian'zheng'd"), "renjianzhengd");
+    }
+
+    #[test]
+    fn double_pinyin_preedit_decodes_pairs_and_keeps_tail() {
+        let mut d = PinyinDict::from_entries(vec![
+            ("zhong".into(), "中".into(), 100),
+            ("guo".into(), "国".into(), 100),
+        ]);
+        let alg = crate::algebra::Algebra::natural_code();
+        d = d.with_zrm(crate::zrm::ZrmMap::build(
+            &["zhong".into(), "guo".into()],
+            &alg,
+        ));
+        assert_eq!(d.format_preedit("vsgo", 4), ("zhong'guo".into(), 9));
+        assert_eq!(d.format_preedit("vsg", 3), ("zhong'g".into(), 7));
     }
 
     #[test]
