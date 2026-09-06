@@ -5,14 +5,16 @@ Windows TSF (Text Services Framework) shell for the `heshun` Rust input-method e
 ## Scope of the current minimal implementation
 
 - Registers one COM `ITfTextInputProcessorEx` text service named **heshun**.
-- Intercepts `a-z`, Backspace, Escape, Space, and `1-9` through `ITfKeyEventSink`.
-- Loads `zhengma66.schema.yaml` or `pinyin_full.schema.yaml` through the Rust C ABI, selected internally by the input-method toggle.
+- Intercepts `a-z`, layout-specific double-pinyin OEM keys, Backspace, Escape, Space, and `1-9` through `ITfKeyEventSink`.
+- Loads `zhengma66.schema.yaml`, `pinyin_full.schema.yaml`, or one of the six `double_pinyin_*.schema.yaml` files through the Rust C ABI. The selected mode is persisted in `HKCU\Software\Heshun\InputMode`.
 - Commits returned text into the focused application through an asynchronous TSF edit session.
 - Starts and updates a TSF composition/preedit through separate edit sessions, applies the registered display attribute, and shows a native non-activating candidate window. Host-visible rendering still requires real-application verification.
 
 ## Current behavior
 
-- System-wide Zhengma and full Pinyin input in TSF-aware Windows applications. Press `Ctrl+`` to switch between them inside the same Windows input method entry.
+- System-wide Zhengma, full Pinyin, and six Rime double-pinyin layouts (Natural Code, Flypy, Microsoft, ABC, Pinyin Plus Plus, and Shitong) in TSF-aware Windows applications. Press `Ctrl+`` to switch between Zhengma and full Pinyin; use the language-bar menu to select the exact layout.
+- Double-pinyin preedit is supplied by the Rust runtime's display view (`preedit`/`preedit_cursor`), so the host composition displays decoded syllables such as `zhong'guo` while the raw key buffer remains available for editing and fallback commit.
+- The TSF shell recognizes `VK_OEM_1` (`;`) as a double-pinyin layout key before punctuation fallback, preserving compatibility with layouts that use semicolon as a second key.
 - Native non-activating candidate window showing the pending code and candidates; Space chooses the first candidate and `1-9` choose by number.
 - Backspace edits the pending code while one exists, then returns to the host application to delete committed text once the pending code is empty.
 - Escape clears pending code. `Delete` remains owned by the host application.
@@ -34,7 +36,7 @@ Windows TSF (Text Services Framework) shell for the `heshun` Rust input-method e
    cmake --build build-tsf
    ```
 
-The build copies `heshun.dll` and `heshun/schemas/` beside `heshun_tsf.dll`.
+The build copies `heshun.dll` and `heshun/schemas/` beside `heshun_tsf.dll`, including the six `double_pinyin_*.schema.yaml` files and their `pinyin_*.bin` dictionaries.
 
 ## Package
 

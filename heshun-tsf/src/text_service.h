@@ -24,11 +24,26 @@ class HeshunTextService final : public ITfTextInputProcessorEx,
                                 public ITfDisplayAttributeProvider,
                                 public ITfCompositionSink {
 public:
+    enum class InputMode {
+        Zhengma,
+        Pinyin,
+        DoublePinyinZrm,
+        DoublePinyinFlypy,
+        DoublePinyinMspy,
+        DoublePinyinAbc,
+        DoublePinyinPyjj,
+        DoublePinyinSt,
+    };
+
     HeshunTextService();
     void ToggleInputMethodFromLangBar();
     void SelectInputMethodFromLangBar(bool pinyin);
+    void SelectInputModeFromLangBar(unsigned int mode);
     HWND FocusedContextWindow() const;
     bool IsPinyinMode() const { return pinyin_mode_; }
+    bool IsDoublePinyinMode() const { return static_cast<int>(input_mode_) >= static_cast<int>(InputMode::DoublePinyinZrm); }
+    bool IsInputMode(InputMode mode) const { return input_mode_ == mode; }
+    InputMode input_mode() const { return input_mode_; }
     bool ascii_mode() const { return ascii_mode_; }
 
     // IUnknown
@@ -126,7 +141,7 @@ private:
     void ChangeCandidatePage(int direction);
     bool DispatchRuntime(unsigned int opcode, long long value = 0, CandidateKey key = {});
     void TraceSelectionKey(WPARAM key) const;
-    bool FeedKey(WPARAM key, std::string& committed);
+    bool FeedKey(WPARAM key, LPARAM lparam, std::string& committed);
     HRESULT CommitText(ITfContext* context, const char* utf8);
     HRESULT UpdateComposition(ITfContext* context);
     HRESULT CancelComposition(ITfContext* context);
@@ -147,6 +162,7 @@ private:
     bool ReadCompartmentDWORD(REFGUID guid, DWORD* value) const;
     void ShowLanguageBar(bool show);
     void ClearActiveContext(const char* reason);
+    bool UsesSemicolonDoublePinyin() const;
 
     volatile LONG ref_count_ = 1;
     ITfThreadMgr* thread_mgr_ = nullptr;
@@ -176,6 +192,7 @@ private:
     bool empty_context_ = false;
     bool keyboard_open_ = true;
     DWORD conversion_mode_ = TF_CONVERSIONMODE_NATIVE;
+    InputMode input_mode_ = InputMode::Zhengma;
     bool pinyin_mode_ = false;
     bool shift_down_ = false;
     bool shift_used_with_other_key_ = false;

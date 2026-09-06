@@ -10,6 +10,12 @@ ITfKeyEventSink → heshun C ABI → ITfEditSession → ITfInsertAtSelection
 
 Composition updates use a separate edit session after `StartComposition`; candidate display is an independent non-activating window path. Real-host rendering and the complete lifecycle matrix remain to be verified.
 
+## Double-pinyin TSF path
+
+The TSF shell selects one of the six `double_pinyin_*.schema.yaml` files through the language-bar menu. Runtime `pending` remains the raw key buffer, while runtime `preedit` and `preedit_cursor` are written to the host composition. Layout keys that overlap punctuation (Microsoft and Shitong `VK_OEM_1`) are routed through `ToUnicodeEx` and the Rust runtime before the pending-symbol punctuation fallback.
+
+The current automated checks cover schema/resource presence in the copied runtime bundle, C ABI layout, key-event conversion, and TSF interface contracts. They do not replace manual Notepad/Word verification of actual double-pinyin key input and host rendering.
+
 ## Required interfaces
 
 `HeshunTextService` implements:

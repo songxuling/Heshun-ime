@@ -26,6 +26,18 @@ if not exist "%BIN%\schemas\pinyin_full.schema.yaml" (
   echo Schema directory is incomplete: %BIN%\schemas
   exit /b 1
 )
+for %%S in (zrm flypy mspy abc pyjj st) do (
+  if not exist "%BIN%\schemas\double_pinyin_%%S.schema.yaml" (
+    echo Missing double-pinyin schema: %BIN%\schemas\double_pinyin_%%S.schema.yaml
+    exit /b 1
+  )
+)
+for %%S in (zrm flypy mspy abc pyjj st) do (
+  if not exist "%BIN%\schemas\pinyin_%%S.bin" (
+    echo Missing double-pinyin dictionary: %BIN%\schemas\pinyin_%%S.bin
+    exit /b 1
+  )
+)
 
 rmdir /s /q "%DIST%" 2>nul
 mkdir "%DIST%\schemas" || exit /b 1

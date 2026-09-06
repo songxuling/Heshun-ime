@@ -35,6 +35,36 @@ void Trace(const std::string& message);
 std::string Hr(HRESULT hr);
 constexpr UINT kLangBarMenuZhengma = 1;
 constexpr UINT kLangBarMenuPinyin = 2;
+constexpr UINT kLangBarMenuDoublePinyinZrm = 3;
+constexpr UINT kLangBarMenuDoublePinyinFlypy = 4;
+constexpr UINT kLangBarMenuDoublePinyinMspy = 5;
+constexpr UINT kLangBarMenuDoublePinyinAbc = 6;
+constexpr UINT kLangBarMenuDoublePinyinPyjj = 7;
+constexpr UINT kLangBarMenuDoublePinyinSt = 8;
+
+HeshunTextService::InputMode InputModeFromMenu(UINT id) {
+    switch (id) {
+    case kLangBarMenuDoublePinyinZrm: return HeshunTextService::InputMode::DoublePinyinZrm;
+    case kLangBarMenuDoublePinyinFlypy: return HeshunTextService::InputMode::DoublePinyinFlypy;
+    case kLangBarMenuDoublePinyinMspy: return HeshunTextService::InputMode::DoublePinyinMspy;
+    case kLangBarMenuDoublePinyinAbc: return HeshunTextService::InputMode::DoublePinyinAbc;
+    case kLangBarMenuDoublePinyinPyjj: return HeshunTextService::InputMode::DoublePinyinPyjj;
+    case kLangBarMenuDoublePinyinSt: return HeshunTextService::InputMode::DoublePinyinSt;
+    default: return HeshunTextService::InputMode::Zhengma;
+    }
+}
+
+UINT MenuFromInputMode(HeshunTextService::InputMode mode) {
+    switch (mode) {
+    case HeshunTextService::InputMode::DoublePinyinZrm: return kLangBarMenuDoublePinyinZrm;
+    case HeshunTextService::InputMode::DoublePinyinFlypy: return kLangBarMenuDoublePinyinFlypy;
+    case HeshunTextService::InputMode::DoublePinyinMspy: return kLangBarMenuDoublePinyinMspy;
+    case HeshunTextService::InputMode::DoublePinyinAbc: return kLangBarMenuDoublePinyinAbc;
+    case HeshunTextService::InputMode::DoublePinyinPyjj: return kLangBarMenuDoublePinyinPyjj;
+    case HeshunTextService::InputMode::DoublePinyinSt: return kLangBarMenuDoublePinyinSt;
+    default: return 0;
+    }
+}
 
 bool IsRangeCovered(TfEditCookie edit_cookie, ITfRange* tested, ITfRange* covering) {
     if (!tested || !covering) return false;
@@ -131,11 +161,23 @@ public:
                                 kLangBarMenuZhengma, L"郑码");
                     AppendMenuW(menu, MF_STRING | MF_ENABLED,
                                 kLangBarMenuPinyin, L"全拼");
-                    CheckMenuRadioItem(
-                        menu, kLangBarMenuZhengma, kLangBarMenuPinyin,
-                        service_->IsPinyinMode() ? kLangBarMenuPinyin
-                                                 : kLangBarMenuZhengma,
-                        MF_BYCOMMAND);
+                    AppendMenuW(menu, MF_STRING | MF_ENABLED,
+                                kLangBarMenuDoublePinyinZrm, L"自然码双拼");
+                    AppendMenuW(menu, MF_STRING | MF_ENABLED,
+                                kLangBarMenuDoublePinyinFlypy, L"小鹤双拼");
+                    AppendMenuW(menu, MF_STRING | MF_ENABLED,
+                                kLangBarMenuDoublePinyinMspy, L"微软双拼");
+                    AppendMenuW(menu, MF_STRING | MF_ENABLED,
+                                kLangBarMenuDoublePinyinAbc, L"智能ABC双拼");
+                    AppendMenuW(menu, MF_STRING | MF_ENABLED,
+                                kLangBarMenuDoublePinyinPyjj, L"拼音加加双拼");
+                    AppendMenuW(menu, MF_STRING | MF_ENABLED,
+                                kLangBarMenuDoublePinyinSt, L"四通双拼");
+                    const UINT selected_mode = service_->IsDoublePinyinMode()
+                                                   ? MenuFromInputMode(service_->input_mode())
+                                                   : service_->IsPinyinMode() ? kLangBarMenuPinyin : kLangBarMenuZhengma;
+                    CheckMenuRadioItem(menu, kLangBarMenuZhengma, kLangBarMenuDoublePinyinSt,
+                                       selected_mode, MF_BYCOMMAND);
                     const UINT selected = TrackPopupMenuEx(
                         menu, TPM_NONOTIFY | TPM_RETURNCMD | TPM_RIGHTBUTTON,
                         point.x, point.y, owner, nullptr);
@@ -149,12 +191,42 @@ public:
     STDMETHODIMP InitMenu(ITfMenu* menu) override {
         if (!menu) return E_INVALIDARG;
         const DWORD zhengma_flags = service_->IsPinyinMode() ? 0 : TF_LBMENUF_RADIOCHECKED;
-        const DWORD pinyin_flags = service_->IsPinyinMode() ? TF_LBMENUF_RADIOCHECKED : 0;
+        const DWORD pinyin_flags = service_->IsPinyinMode() && !service_->IsDoublePinyinMode() ? TF_LBMENUF_RADIOCHECKED : 0;
+        const DWORD zrm_flags = service_->IsInputMode(HeshunTextService::InputMode::DoublePinyinZrm) ? TF_LBMENUF_RADIOCHECKED : 0;
+        const DWORD flypy_flags = service_->IsInputMode(HeshunTextService::InputMode::DoublePinyinFlypy) ? TF_LBMENUF_RADIOCHECKED : 0;
+        const DWORD mspy_flags = service_->IsInputMode(HeshunTextService::InputMode::DoublePinyinMspy) ? TF_LBMENUF_RADIOCHECKED : 0;
+        const DWORD abc_flags = service_->IsInputMode(HeshunTextService::InputMode::DoublePinyinAbc) ? TF_LBMENUF_RADIOCHECKED : 0;
+        const DWORD pyjj_flags = service_->IsInputMode(HeshunTextService::InputMode::DoublePinyinPyjj) ? TF_LBMENUF_RADIOCHECKED : 0;
+        const DWORD st_flags = service_->IsInputMode(HeshunTextService::InputMode::DoublePinyinSt) ? TF_LBMENUF_RADIOCHECKED : 0;
         HRESULT hr = menu->AddMenuItem(kLangBarMenuZhengma, zhengma_flags, nullptr, nullptr,
                                        L"郑码", 2, nullptr);
         if (SUCCEEDED(hr)) {
             hr = menu->AddMenuItem(kLangBarMenuPinyin, pinyin_flags, nullptr, nullptr,
                                    L"全拼", 2, nullptr);
+        }
+        if (SUCCEEDED(hr)) {
+            hr = menu->AddMenuItem(kLangBarMenuDoublePinyinZrm, zrm_flags, nullptr, nullptr,
+                                   L"自然码双拼", 4, nullptr);
+        }
+        if (SUCCEEDED(hr)) {
+            hr = menu->AddMenuItem(kLangBarMenuDoublePinyinFlypy, flypy_flags, nullptr, nullptr,
+                                   L"小鹤双拼", 4, nullptr);
+        }
+        if (SUCCEEDED(hr)) {
+            hr = menu->AddMenuItem(kLangBarMenuDoublePinyinMspy, mspy_flags, nullptr, nullptr,
+                                   L"微软双拼", 4, nullptr);
+        }
+        if (SUCCEEDED(hr)) {
+            hr = menu->AddMenuItem(kLangBarMenuDoublePinyinAbc, abc_flags, nullptr, nullptr,
+                                   L"智能ABC双拼", 4, nullptr);
+        }
+        if (SUCCEEDED(hr)) {
+            hr = menu->AddMenuItem(kLangBarMenuDoublePinyinPyjj, pyjj_flags, nullptr, nullptr,
+                                   L"拼音加加双拼", 4, nullptr);
+        }
+        if (SUCCEEDED(hr)) {
+            hr = menu->AddMenuItem(kLangBarMenuDoublePinyinSt, st_flags, nullptr, nullptr,
+                                   L"四通双拼", 4, nullptr);
         }
         Trace("LangBarItem: InitMenu " + Hr(hr));
         return hr;
@@ -162,8 +234,11 @@ public:
     STDMETHODIMP OnMenuSelect(UINT id) override {
         if (id == kLangBarMenuZhengma && service_->IsPinyinMode()) {
             service_->SelectInputMethodFromLangBar(false);
-        } else if (id == kLangBarMenuPinyin && !service_->IsPinyinMode()) {
+        } else if (id == kLangBarMenuPinyin &&
+                   (!service_->IsPinyinMode() || service_->IsDoublePinyinMode())) {
             service_->SelectInputMethodFromLangBar(true);
+        } else if (id >= kLangBarMenuDoublePinyinZrm && id <= kLangBarMenuDoublePinyinSt) {
+            service_->SelectInputModeFromLangBar(id);
         }
         Trace("LangBarItem: OnMenuSelect id=" + std::to_string(id));
         return S_OK;
@@ -652,24 +727,42 @@ std::string Hr(HRESULT hr) {
     return out.str();
 }
 
-bool LoadPinyinMode() {
+HeshunTextService::InputMode LoadInputMode() {
     HKEY key = nullptr;
-    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Heshun", 0, KEY_READ, &key) != ERROR_SUCCESS) return false;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Heshun", 0, KEY_READ, &key) != ERROR_SUCCESS) return HeshunTextService::InputMode::Zhengma;
     wchar_t value[32]{};
     DWORD type = REG_SZ;
     DWORD bytes = sizeof(value);
     const LONG result = RegQueryValueExW(key, L"InputMode", nullptr, &type,
                                          reinterpret_cast<BYTE*>(value), &bytes);
     RegCloseKey(key);
-    return result == ERROR_SUCCESS && type == REG_SZ && _wcsicmp(value, L"pinyin") == 0;
+    if (result != ERROR_SUCCESS || type != REG_SZ) return HeshunTextService::InputMode::Zhengma;
+    if (_wcsicmp(value, L"double_pinyin") == 0 || _wcsicmp(value, L"double_pinyin_zrm") == 0) return HeshunTextService::InputMode::DoublePinyinZrm;
+    if (_wcsicmp(value, L"double_pinyin_flypy") == 0) return HeshunTextService::InputMode::DoublePinyinFlypy;
+    if (_wcsicmp(value, L"double_pinyin_mspy") == 0) return HeshunTextService::InputMode::DoublePinyinMspy;
+    if (_wcsicmp(value, L"double_pinyin_abc") == 0) return HeshunTextService::InputMode::DoublePinyinAbc;
+    if (_wcsicmp(value, L"double_pinyin_pyjj") == 0) return HeshunTextService::InputMode::DoublePinyinPyjj;
+    if (_wcsicmp(value, L"double_pinyin_st") == 0) return HeshunTextService::InputMode::DoublePinyinSt;
+    if (_wcsicmp(value, L"pinyin") == 0) return HeshunTextService::InputMode::Pinyin;
+    return HeshunTextService::InputMode::Zhengma;
 }
 
-void SavePinyinMode(bool pinyin_mode) {
+void SaveInputMode(HeshunTextService::InputMode mode) {
     HKEY key = nullptr;
     DWORD disposition = 0;
     if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\Heshun", 0, nullptr, 0,
                         KEY_WRITE, nullptr, &key, &disposition) != ERROR_SUCCESS) return;
-    const wchar_t* value = pinyin_mode ? L"pinyin" : L"zhengma";
+    const wchar_t* value = L"zhengma";
+    switch (mode) {
+    case HeshunTextService::InputMode::Pinyin: value = L"pinyin"; break;
+    case HeshunTextService::InputMode::DoublePinyinZrm: value = L"double_pinyin_zrm"; break;
+    case HeshunTextService::InputMode::DoublePinyinFlypy: value = L"double_pinyin_flypy"; break;
+    case HeshunTextService::InputMode::DoublePinyinMspy: value = L"double_pinyin_mspy"; break;
+    case HeshunTextService::InputMode::DoublePinyinAbc: value = L"double_pinyin_abc"; break;
+    case HeshunTextService::InputMode::DoublePinyinPyjj: value = L"double_pinyin_pyjj"; break;
+    case HeshunTextService::InputMode::DoublePinyinSt: value = L"double_pinyin_st"; break;
+    case HeshunTextService::InputMode::Zhengma: break;
+    }
     RegSetValueExW(key, L"InputMode", 0, REG_SZ,
                    reinterpret_cast<const BYTE*>(value),
                    static_cast<DWORD>((wcslen(value) + 1) * sizeof(wchar_t)));
@@ -679,7 +772,8 @@ void SavePinyinMode(bool pinyin_mode) {
 } // namespace
 
 HeshunTextService::HeshunTextService() {
-    pinyin_mode_ = LoadPinyinMode();
+    input_mode_ = LoadInputMode();
+    pinyin_mode_ = input_mode_ != InputMode::Zhengma;
     candidate_list_ = std::make_unique<HeshunCandidateList>(this);
     InterlockedIncrement(&g_object_count);
 }
@@ -1131,15 +1225,49 @@ STDMETHODIMP HeshunTextService::OnActivated(REFCLSID clsid, REFGUID profile, BOO
 }
 
 const char* HeshunTextService::ActiveSchemaId() const {
-    return pinyin_mode_ ? "pinyin_full" : "zhengma66";
+    switch (input_mode_) {
+    case InputMode::Pinyin: return "pinyin_full";
+    case InputMode::DoublePinyinZrm: return "double_pinyin_zrm";
+    case InputMode::DoublePinyinFlypy: return "double_pinyin_flypy";
+    case InputMode::DoublePinyinMspy: return "double_pinyin_mspy";
+    case InputMode::DoublePinyinAbc: return "double_pinyin_abc";
+    case InputMode::DoublePinyinPyjj: return "double_pinyin_pyjj";
+    case InputMode::DoublePinyinSt: return "double_pinyin_st";
+    case InputMode::Zhengma: return "zhengma66";
+    }
+    return "zhengma66";
 }
 
 const char* HeshunTextService::ActiveSchemaFile() const {
-    return std::strcmp(ActiveSchemaId(), "pinyin_full") == 0 ? "pinyin_full.schema.yaml" : "zhengma66.schema.yaml";
+    switch (input_mode_) {
+    case InputMode::DoublePinyinZrm: return "double_pinyin_zrm.schema.yaml";
+    case InputMode::DoublePinyinFlypy: return "double_pinyin_flypy.schema.yaml";
+    case InputMode::DoublePinyinMspy: return "double_pinyin_mspy.schema.yaml";
+    case InputMode::DoublePinyinAbc: return "double_pinyin_abc.schema.yaml";
+    case InputMode::DoublePinyinPyjj: return "double_pinyin_pyjj.schema.yaml";
+    case InputMode::DoublePinyinSt: return "double_pinyin_st.schema.yaml";
+    case InputMode::Pinyin: return "pinyin_full.schema.yaml";
+    case InputMode::Zhengma: return "zhengma66.schema.yaml";
+    }
+    return "zhengma66.schema.yaml";
 }
 
 const char* HeshunTextService::ActiveUserDictFile() const {
-    return std::strcmp(ActiveSchemaId(), "pinyin_full") == 0 ? "pinyin_full.userdb.json" : "zhengma66.userdb.json";
+    switch (input_mode_) {
+    case InputMode::DoublePinyinZrm: return "double_pinyin_zrm.userdb.json";
+    case InputMode::DoublePinyinFlypy: return "double_pinyin_flypy.userdb.json";
+    case InputMode::DoublePinyinMspy: return "double_pinyin_mspy.userdb.json";
+    case InputMode::DoublePinyinAbc: return "double_pinyin_abc.userdb.json";
+    case InputMode::DoublePinyinPyjj: return "double_pinyin_pyjj.userdb.json";
+    case InputMode::DoublePinyinSt: return "double_pinyin_st.userdb.json";
+    case InputMode::Pinyin: return "pinyin_full.userdb.json";
+    case InputMode::Zhengma: return "zhengma66.userdb.json";
+    }
+    return "zhengma66.userdb.json";
+}
+
+bool HeshunTextService::UsesSemicolonDoublePinyin() const {
+    return input_mode_ == InputMode::DoublePinyinMspy || input_mode_ == InputMode::DoublePinyinSt;
 }
 
 bool HeshunTextService::LoadEngine() {
@@ -1178,12 +1306,14 @@ bool HeshunTextService::TryRecoverEngine() {
 }
 
 void HeshunTextService::RefreshPersistentInputMode() {
-    const bool persisted_mode = LoadPinyinMode();
-    if (persisted_mode == pinyin_mode_) return;
+    const InputMode persisted_mode = LoadInputMode();
+    if (persisted_mode == input_mode_) return;
     if (runtime_) FreeEngine();
-    pinyin_mode_ = persisted_mode;
+    input_mode_ = persisted_mode;
+    pinyin_mode_ = input_mode_ != InputMode::Zhengma;
     if (LoadEngine()) {
-        Trace(pinyin_mode_ ? "Input method: synchronized Pinyin" :
+        Trace(IsDoublePinyinMode() ? "Input method: synchronized Double Pinyin" :
+              pinyin_mode_ ? "Input method: synchronized Pinyin" :
                              "Input method: synchronized Zhengma");
     } else {
         Trace("Input method sync failed: engine reload failed");
@@ -1528,8 +1658,9 @@ void HeshunTextService::ToggleInputMethod(ITfContext* context) {
     if (!thread_mgr_) return;
     CancelComposition(context);
     FreeEngine();
-    pinyin_mode_ = !pinyin_mode_;
-    SavePinyinMode(pinyin_mode_);
+    input_mode_ = input_mode_ == InputMode::Zhengma ? InputMode::Pinyin : InputMode::Zhengma;
+    pinyin_mode_ = input_mode_ != InputMode::Zhengma;
+    SaveInputMode(input_mode_);
     if (!LoadEngine()) {
         Trace("Input method switch failed: engine reload failed");
         return;
@@ -1543,7 +1674,30 @@ void HeshunTextService::ToggleInputMethodFromLangBar() {
 }
 
 void HeshunTextService::SelectInputMethodFromLangBar(bool pinyin) {
-    if (pinyin != pinyin_mode_) ToggleInputMethod(active_context_);
+    const InputMode requested = pinyin ? InputMode::Pinyin : InputMode::Zhengma;
+    if (requested == input_mode_) return;
+    CancelComposition(active_context_);
+    FreeEngine();
+    input_mode_ = requested;
+    pinyin_mode_ = input_mode_ != InputMode::Zhengma;
+    SaveInputMode(input_mode_);
+    if (!LoadEngine()) Trace("Input method selection failed: engine reload failed");
+    else Trace(pinyin ? "Input method: Pinyin" : "Input method: Zhengma");
+    if (langbar_status_) langbar_status_->NotifyUpdate();
+}
+
+void HeshunTextService::SelectInputModeFromLangBar(unsigned int mode) {
+    if (mode < kLangBarMenuDoublePinyinZrm || mode > kLangBarMenuDoublePinyinSt) return;
+    const InputMode requested = InputModeFromMenu(mode);
+    if (requested == input_mode_) return;
+    CancelComposition(active_context_);
+    FreeEngine();
+    input_mode_ = requested;
+    pinyin_mode_ = true;
+    SaveInputMode(input_mode_);
+    if (!LoadEngine()) Trace("Input method selection failed: double pinyin schema reload failed");
+    else Trace("Input method: Double Pinyin ZRM");
+    if (langbar_status_) langbar_status_->NotifyUpdate();
 }
 
 bool HeshunTextService::IsHandledKey(WPARAM key) const {
@@ -1557,6 +1711,7 @@ bool HeshunTextService::IsHandledKey(WPARAM key) const {
     if (ascii_mode_) return false;
     if (key >= 'A' && key <= 'Z') return true;
     if (key >= 'a' && key <= 'z') return true;
+    if (UsesSemicolonDoublePinyin() && key == VK_OEM_1) return true;
     if (key == VK_BACK) return HasPending();
     if (key == VK_RETURN || key == VK_SPACE) return HasPending();
     if (key == VK_LEFT || key == VK_RIGHT) return HasPending();
@@ -1565,11 +1720,18 @@ bool HeshunTextService::IsHandledKey(WPARAM key) const {
     return false;
 }
 
-bool HeshunTextService::FeedKey(WPARAM key, std::string& committed) {
+bool HeshunTextService::FeedKey(WPARAM key, LPARAM lparam, std::string& committed) {
     committed.clear();
     if (!runtime_) return false;
     if (key >= 'A' && key <= 'Z') { const bool consumed = DispatchRuntime(0, static_cast<long long>(key - 'A' + 'a')); committed = last_committed_; return consumed; }
     if (key >= 'a' && key <= 'z') { const bool consumed = DispatchRuntime(0, static_cast<long long>(key)); committed = last_committed_; return consumed; }
+    if (UsesSemicolonDoublePinyin() && key == VK_OEM_1) {
+        const std::wstring text = TranslateHeshunKeyText(key, CaptureHeshunKeyState(lparam));
+        if (text.size() != 1 || text[0] > 0x7f) return false;
+        const bool consumed = DispatchRuntime(0, static_cast<long long>(text[0]));
+        committed = last_committed_;
+        return consumed;
+    }
     if (key == VK_BACK) return DispatchRuntime(1);
     if (key == VK_ESCAPE) return DispatchRuntime(3);
     if (key == VK_LEFT || key == VK_RIGHT) {
@@ -1807,7 +1969,8 @@ STDMETHODIMP HeshunTextService::OnKeyDown(ITfContext* context, WPARAM wparam, LP
         return S_OK;
     }
     if (shift_down_) shift_used_with_other_key_ = true;
-    if (HasPending()) {
+    const bool is_double_pinyin_key = UsesSemicolonDoublePinyin() && wparam == VK_OEM_1;
+    if (HasPending() && !is_double_pinyin_key) {
         const HeshunKeyState key_state = CaptureHeshunKeyState(lparam);
         const std::wstring symbol = IsHostShortcut(wparam, key_state) ? std::wstring{} :
                                     TranslateHeshunKeyText(wparam, key_state);
@@ -1824,7 +1987,7 @@ STDMETHODIMP HeshunTextService::OnKeyDown(ITfContext* context, WPARAM wparam, LP
     if (!IsHandledKey(wparam)) return S_OK;
     Trace("OnKeyDown: handled");
     std::string committed;
-    if (!FeedKey(wparam, committed)) {
+    if (!FeedKey(wparam, lparam, committed)) {
         // The TSF already owns this key in Chinese mode. The engine may reject
         // an invalid continuation while preserving the previous composition;
         // never let the rejected letter fall through to the host application.
