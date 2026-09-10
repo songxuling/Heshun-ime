@@ -160,6 +160,8 @@ private:
     HRESULT InitCompartmentSinks();
     void UninitCompartmentSinks();
     bool ReadCompartmentDWORD(REFGUID guid, DWORD* value) const;
+    bool ReadContextCompartmentDWORD(ITfContext* context, REFGUID guid, DWORD* value) const;
+    bool ContextInputDisabled() const;
     void ShowLanguageBar(bool show);
     void ClearActiveContext(const char* reason);
     bool UsesSemicolonDoublePinyin() const;

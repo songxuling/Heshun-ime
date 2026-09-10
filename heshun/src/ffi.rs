@@ -491,6 +491,34 @@ mod tests {
     }
 
     #[test]
+    fn double_pinyin_runtime_exposes_syllable_separated_preedit() {
+        let schema = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("schemas")
+            .join("double_pinyin_zrm.schema.yaml");
+        let cpath = cstring(schema.to_str().unwrap());
+        let runtime = hs_runtime_new_schema(cpath.as_ptr());
+        assert!(!runtime.is_null());
+
+        let mut result = ptr::null_mut();
+        for key in ['v', 's', 'g', 'o'] {
+            let event = HsRuntimeEvent { opcode: 0, value: key as i64, source: 0, ordinal: 0 };
+            result = hs_runtime_event(runtime, &event);
+            assert!(!result.is_null());
+            if key != 'o' {
+                hs_runtime_result_free(result);
+            }
+        }
+        let view = unsafe { &*hs_runtime_result_view(result) };
+        let pending = unsafe { std::str::from_utf8(std::slice::from_raw_parts(view.pending.ptr, view.pending.len as usize)).unwrap() };
+        let preedit = unsafe { std::str::from_utf8(std::slice::from_raw_parts(view.preedit.ptr, view.preedit.len as usize)).unwrap() };
+        assert_eq!(pending, "vsgo");
+        assert_eq!(preedit, "zhong'guo");
+        assert_eq!(view.preedit_cursor, 9);
+        hs_runtime_result_free(result);
+        hs_runtime_free(runtime);
+    }
+
+    #[test]
     fn ffi_null_safety() {
         let mut out: *mut c_char = ptr::null_mut();
         assert_eq!(hs_feed(ptr::null_mut(), b'a' as c_char, &mut out), 0);

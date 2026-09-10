@@ -95,51 +95,11 @@ impl PinyinDict {
     /// rather than word boundaries: codes which have a single-character entry
     /// are valid syllables, while multi-character phrase codes are not used as
     /// display separators.
+    /// Format a display preedit through the shared spelling projection.
+    /// The dictionary retains word/syllable data; layout-specific decoding is
+    /// owned by `projection`, not by this dictionary type.
     pub fn format_preedit(&self, input: &str, cursor: usize) -> (String, usize) {
-        let (normalized, raw_cursor_input) = if let Some(zrm) = &self.zrm {
-            (
-                zrm.to_pinyin_display(input),
-                zrm.to_pinyin_display(&input.chars().take(cursor).collect::<String>()),
-            )
-        } else {
-            (
-                normalize_pinyin(input),
-                normalize_pinyin(&input.chars().take(cursor).collect::<String>()),
-            )
-        };
-        let mut output = String::new();
-        let mut position = 0usize;
-        let mut display_cursor = 0usize;
-        let raw_prefix_len = raw_cursor_input.chars().count();
-        let normalized_chars: Vec<char> = normalized.chars().collect();
-        while position < normalized_chars.len() {
-            let mut best_end = None;
-            for end in (position + 1..=normalized_chars.len()).rev() {
-                let syllable: String = normalized_chars[position..end].iter().collect();
-                if self.syllables.contains(&syllable) {
-                    best_end = Some(end);
-                    break;
-                }
-            }
-            let end = best_end.unwrap_or(normalized_chars.len());
-            if !output.is_empty() {
-                output.push('\'');
-            }
-            if position < raw_prefix_len {
-                display_cursor = output.chars().count();
-            }
-            output.extend(normalized_chars[position..end].iter());
-            if end <= raw_prefix_len {
-                display_cursor = output.chars().count();
-            }
-            position = end;
-        }
-        if normalized.is_empty() {
-            display_cursor = 0;
-        } else if raw_prefix_len >= normalized_chars.len() {
-            display_cursor = output.chars().count();
-        }
-        (output, display_cursor)
+        crate::projection::format_preedit(self, input, cursor)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -244,6 +204,13 @@ impl PinyinDict {
     pub fn has_code(&self, code: &str) -> bool {
         let code = normalize_pinyin(code);
         self.codes.binary_search(&code).is_ok()
+    }
+
+    /// Whether `code` is a single-character dictionary syllable.  This is
+    /// the syllabary used by the shared spelling projection for preedit
+    /// segmentation.
+    pub fn has_syllable(&self, code: &str) -> bool {
+        self.syllables.contains(code)
     }
 
     /// 查找编码可按音节首字母缩写匹配的词条，例如 zg -> zhongguo。

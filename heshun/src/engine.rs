@@ -12,6 +12,7 @@ use crate::composer::{self, SentenceCandidate};
 use crate::core::CandidateSource;
 use crate::dict::Dict;
 use crate::pinyin::PinyinDict;
+use crate::projection::{self, SpellingProjection};
 use crate::processor::Processor;
 use crate::punctuator::Punctuator;
 use crate::reverse_lookup::ReverseLookup;
@@ -52,7 +53,7 @@ pub enum SchemaKind {
         auto_select: bool,
         auto_select_pattern: Option<String>,
     },
-    /// 音码方案（全拼/双拼）。双拼反向映射通过 PinyinDict.zrm() 获取。
+    /// 音码方案（全拼/双拼）。输入布局由共享 SpellingProjection 选择。
     Script { dict: PinyinDict },
 }
 
@@ -257,7 +258,7 @@ impl Engine {
     /// caller's raw editing buffer for key processing and dictionary lookup.
     pub fn format_preedit(&self, input: &str, cursor: usize) -> (String, usize) {
         match &self.schema {
-            SchemaKind::Script { dict } => dict.format_preedit(input, cursor),
+            SchemaKind::Script { dict } => projection::format_preedit(dict, input, cursor),
             SchemaKind::Table { .. } => (input.to_string(), cursor),
         }
     }
@@ -472,7 +473,7 @@ impl<'a> Session<'a> {
                     Vec::new()
                 };
                 let abbreviation = if self.engine.script_abbreviation && !self.engine.script_strict_spelling {
-                    dict.abbreviation(&self.buf, limit)
+                    dict.abbreviation(&input, limit)
                         .into_iter()
                         .map(|cand| Candidate {
                             word: cand.word,
@@ -484,7 +485,7 @@ impl<'a> Session<'a> {
                     Vec::new()
                 };
                 let correction = if self.engine.script_correction && !self.engine.script_strict_spelling {
-                    dict.correction_with_codes(&self.buf, 1, self.engine.max_corrections)
+                    dict.correction_with_codes(&input, 1, self.engine.max_corrections)
                         .into_iter()
                         .map(|(code, cand)| Candidate {
                             word: cand.word,
@@ -552,7 +553,7 @@ impl<'a> Session<'a> {
         let c = ch.to_ascii_lowercase();
         let script_delimiter = matches!(&self.engine.schema, SchemaKind::Script { .. })
             && (ch == '\'' || ch == ' ');
-        let script_key = matches!(&self.engine.schema, SchemaKind::Script { dict } if dict.zrm().map(|zrm| zrm.accepts_key_char(c)).unwrap_or(false));
+        let script_key = matches!(&self.engine.schema, SchemaKind::Script { dict } if SpellingProjection::from_dict(dict).accepts_key_char(c));
         // A layout key wins over punctuation conversion.  Microsoft and
         // Shitong double-pinyin use `;` as a valid second key, while the
         // punctuator would otherwise turn it into a full-width semicolon.
@@ -663,20 +664,10 @@ impl<'a> Session<'a> {
 
     // ── 音码模式 ──────────────────────────────────────────
 
-    /// 将缓冲按键串转为连续全拼串。
-    /// 全拼模式：直接去空格去引号；
-    /// 双拼模式（zrm 存在）：先把双拼键映射回全拼，再去空格。
+    /// 将原始缓冲投影为词典查询拼写。全拼和双拼共享投影接口。
     fn normalized_input(&self) -> String {
         match &self.engine.schema {
-            SchemaKind::Script { dict } => {
-                let raw = &self.buf;
-                if let Some(map) = dict.zrm() {
-                    // 双拼：按键 → 全拼
-                    map.to_pinyin(raw)
-                } else {
-                    crate::pinyin::normalize_pinyin(raw)
-                }
-            }
+            SchemaKind::Script { dict } => SpellingProjection::from_dict(dict).lookup(&self.buf),
             _ => crate::pinyin::normalize_pinyin(&self.buf),
         }
     }
@@ -684,15 +675,8 @@ impl<'a> Session<'a> {
     fn feed_script(&mut self, dict: &PinyinDict, c: char) -> FeedResult {
         self.buf.push(c);
 
-        let zrm = dict.zrm();
-        // 双拼模式：按键串 → 全拼；全拼模式：直接归一化
-        let input = if let Some(map) = zrm {
-            map.to_pinyin(&self.buf)
-        } else {
-            // Keep delimiters for the syllable graph; dictionary lookups
-            // normalize them internally.
-            self.buf.clone()
-        };
+        let projection = SpellingProjection::from_dict(dict);
+        let input = projection.lookup(&self.buf);
 
         // 双拼下，末尾奇数键会被忽略（尚未构成完整音节），
         // 此时 input 可能为空或与上一状态相同——仍需接受按键。
@@ -704,14 +688,15 @@ impl<'a> Session<'a> {
 
         if input.is_empty() {
             // 双拼首个键尚未成音节：接受但无候选，等待下一键
-            if zrm.is_some() && self.buf.chars().count() < 2 {
+            if projection.is_double_pinyin() && self.buf.chars().count() < 2 {
                 return FeedResult::Waiting;
             }
             self.buf.pop();
             return FeedResult::Rejected;
         }
 
-        self.refresh_sentence_candidates_for(dict, &input);
+        let raw_input = self.buf.clone();
+        self.refresh_sentence_candidates_for(dict, &raw_input);
         self.sentence_offset = 0;
 
         if exact.is_empty() && prefix.is_empty() && self.sentence_cands.is_empty() {
@@ -834,7 +819,7 @@ impl<'a> Session<'a> {
     /// librime 在 composition 发生编辑后会重新生成 translation；如果
     /// 只清空旧缓存而不重建，退格后候选窗口会错误地变为空。
     fn refresh_sentence_candidates(&mut self) {
-        let input = self.normalized_input();
+        let raw_input = self.buf.clone();
         let Some(dict) = (match &self.engine.schema {
             SchemaKind::Script { dict } => Some(dict),
             SchemaKind::Table { .. } => None,
@@ -842,18 +827,20 @@ impl<'a> Session<'a> {
             self.sentence_cands.clear();
             return;
         };
-        self.refresh_sentence_candidates_for(dict, &input);
+        self.refresh_sentence_candidates_for(dict, &raw_input);
     }
 
-    fn refresh_sentence_candidates_for(&mut self, dict: &PinyinDict, input: &str) {
-        if input.is_empty() {
+    fn refresh_sentence_candidates_for(&mut self, dict: &PinyinDict, raw_input: &str) {
+        let projection = SpellingProjection::from_dict(dict);
+        if projection.lookup(raw_input).is_empty() {
             self.sentence_cands.clear();
             return;
         }
         let user_dict = self.engine.user_dict.borrow();
-        self.sentence_cands = crate::word_graph::beam_search_with_user_context(
-            input,
+        self.sentence_cands = crate::word_graph::beam_search_with_user_context_projection(
+            raw_input,
             dict,
+            projection,
             user_dict.as_ref(),
             self.preceding_word.as_deref(),
             9,
@@ -1080,6 +1067,29 @@ user_dict:
         // 清空
         s.clear();
         assert!(s.pending().is_empty());
+    }
+
+    #[test]
+    fn double_pinyin_session_projects_before_graph_refresh() {
+        let mut dict = PinyinDict::from_entries(vec![
+            ("zhong".into(), "中".into(), 100),
+            ("guo".into(), "国".into(), 90),
+            ("zhong guo".into(), "中国".into(), 500),
+        ]);
+        let algebra = crate::algebra::Algebra::natural_code();
+        dict = dict.with_zrm(crate::zrm::ZrmMap::build(
+            &["zhong".into(), "guo".into()],
+            &algebra,
+        ));
+        let engine = Engine::new(SchemaKind::Script { dict });
+        let mut session = engine.session();
+        for key in "vsgo".chars() {
+            assert_eq!(session.feed(key), FeedResult::Waiting);
+        }
+        assert!(session.candidates(9).iter().any(|candidate| candidate.word == "中国"));
+        assert!(session.backspace());
+        assert_eq!(session.pending(), "vsg");
+        assert!(session.candidates(9).iter().any(|candidate| candidate.word == "中"));
     }
 
     #[test]

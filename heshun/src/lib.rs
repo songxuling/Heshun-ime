@@ -24,6 +24,7 @@ pub mod history;
 pub mod pinyin;
 pub mod processor;
 pub mod punctuator;
+pub mod projection;
 pub mod reverse_lookup;
 pub mod schema;
 pub mod segmentation;
@@ -39,6 +40,7 @@ pub use core::{CandidateKey, CandidatePage, CandidateSource, CandidateView, Comm
 pub use dict::Dict;
 pub use engine::{Candidate, Engine, FeedResult, SchemaKind, Session};
 pub use pinyin::PinyinDict;
+pub use projection::SpellingProjection;
 pub use schema::SchemaConfig;
 pub use segmentation::{EdgeProperties, SpellingType, SyllableEdge, SyllableGraph};
 pub use zrm::ZrmMap;

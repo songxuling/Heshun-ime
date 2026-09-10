@@ -33,6 +33,7 @@ namespace {
 
 void Trace(const std::string& message);
 std::string Hr(HRESULT hr);
+std::string Utf16ToUtf8(const std::wstring& value);
 constexpr UINT kLangBarMenuZhengma = 1;
 constexpr UINT kLangBarMenuPinyin = 2;
 constexpr UINT kLangBarMenuDoublePinyinZrm = 3;
@@ -433,7 +434,9 @@ private:
         Trace("Composition: GetRange " + Hr(hr));
         if (SUCCEEDED(hr)) {
             hr = range->SetText(ec, 0, text_.c_str(), static_cast<LONG>(text_.size()));
-            Trace("Composition: SetText " + Hr(hr));
+            Trace("Composition: SetText " + Hr(hr) +
+                  " utf16_len=" + std::to_string(text_.size()) +
+                  " text=" + Utf16ToUtf8(text_));
             if (SUCCEEDED(hr) && service_->display_attribute_atom() != TF_INVALID_GUIDATOM) {
                 ITfProperty* attribute = nullptr;
                 hr = context_->GetProperty(GUID_PROP_ATTRIBUTE, &attribute);
@@ -700,6 +703,7 @@ std::string ModuleDirectory() {
 
 void Trace(const std::string& message) {
     static std::filesystem::path log_path;
+    static bool wrote_process_identity = false;
     if (log_path.empty()) {
         const auto module_dir = ModuleDirectoryPath();
         if (!module_dir.empty()) {
@@ -718,7 +722,18 @@ void Trace(const std::string& message) {
     }
     if (log_path.empty()) return;
     std::ofstream log(log_path, std::ios::app);
-    if (log) log << message << '\n';
+    if (!log) return;
+    if (!wrote_process_identity) {
+        std::vector<wchar_t> executable(MAX_PATH);
+        const DWORD length = GetModuleFileNameW(nullptr, executable.data(),
+                                                static_cast<DWORD>(executable.size()));
+        const std::wstring path = length && length < executable.size()
+            ? std::wstring(executable.data(), length) : L"<unavailable>";
+        log << "Process: pid=" << GetCurrentProcessId()
+            << " exe=" << Utf16ToUtf8(path) << '\n';
+        wrote_process_identity = true;
+    }
+    log << message << '\n';
 }
 
 std::string Hr(HRESULT hr) {
@@ -996,9 +1011,12 @@ STDMETHODIMP HeshunTextService::ActivateEx(ITfThreadMgr* thread_mgr, TfClientId 
         if (FAILED(compartment_hr)) {
             hr = compartment_hr;
         } else {
-            OnCompartmentChanged(GUID_COMPARTMENT_KEYBOARD_DISABLED);
-            OnCompartmentChanged(GUID_COMPARTMENT_EMPTYCONTEXT);
-            OnCompartmentChanged(GUID_COMPARTMENT_KEYBOARD_OPENCLOSE);
+            // A thread-level open/close compartment commonly starts at zero
+            // in Windows Search before the TIP owns the keyboard state. Do
+            // not interpret that activation-time default as an explicit user
+            // close; WeaselTSF likewise opens the keyboard during activation.
+            keyboard_open_ = true;
+            ShowLanguageBar(true);
             OnCompartmentChanged(GUID_COMPARTMENT_KEYBOARD_INPUTMODE_CONVERSION);
         }
         Trace("ActivateEx: key sink and language bar advised");
@@ -1365,6 +1383,9 @@ bool HeshunTextService::DispatchRuntime(unsigned int opcode, long long value, Ca
               << " disposition=" << view->disposition
               << " composition=" << view->composition
               << " pending_len=" << view->pending.len
+              << " preedit_len=" << view->preedit.len
+              << " preedit=" << Utf8ViewToString(view->preedit)
+              << " preedit_cursor=" << view->preedit_cursor
               << " candidates=" << view->candidate_count
               << " page=" << view->page_index << "/" << view->page_size
               << " total=" << view->total_candidates
@@ -1429,15 +1450,55 @@ bool HeshunTextService::ReadCompartmentDWORD(REFGUID guid, DWORD* value) const {
     return valid;
 }
 
+bool HeshunTextService::ReadContextCompartmentDWORD(ITfContext* context, REFGUID guid, DWORD* value) const {
+    if (!context || !value) return false;
+    *value = 0;
+    ITfCompartmentMgr* manager = nullptr;
+    ITfCompartment* compartment = nullptr;
+    VARIANT var;
+    VariantInit(&var);
+    HRESULT hr = context->QueryInterface(IID_PPV_ARGS(&manager));
+    if (SUCCEEDED(hr)) hr = manager->GetCompartment(guid, &compartment);
+    if (SUCCEEDED(hr)) hr = compartment->GetValue(&var);
+    const bool valid = SUCCEEDED(hr) && var.vt == VT_I4;
+    if (valid) *value = static_cast<DWORD>(var.lVal);
+    VariantClear(&var);
+    if (compartment) compartment->Release();
+    if (manager) manager->Release();
+    return valid;
+}
+
+bool HeshunTextService::ContextInputDisabled() const {
+    if (!active_context_) return false;
+    DWORD disabled_value = 0;
+    DWORD empty_value = 0;
+    const bool disabled_present = ReadContextCompartmentDWORD(
+        active_context_, GUID_COMPARTMENT_KEYBOARD_DISABLED, &disabled_value);
+    const bool empty_present = ReadContextCompartmentDWORD(
+        active_context_, GUID_COMPARTMENT_EMPTYCONTEXT, &empty_value);
+    const bool disabled = disabled_present && disabled_value != 0;
+    const bool empty = empty_present && empty_value != 0;
+    if (disabled || empty) {
+        std::ostringstream out;
+        out << "InputGate: context disabled=" << (disabled ? 1 : 0)
+            << " empty=" << (empty ? 1 : 0)
+            << " disabled_present=" << (disabled_present ? 1 : 0)
+            << " empty_present=" << (empty_present ? 1 : 0);
+        Trace(out.str());
+    }
+    return disabled || empty;
+}
+
 HRESULT HeshunTextService::InitCompartmentSinks() {
     UninitCompartmentSinks();
     if (!thread_mgr_) return E_UNEXPECTED;
     ITfCompartmentMgr* manager = nullptr;
     HRESULT hr = thread_mgr_->QueryInterface(IID_PPV_ARGS(&manager));
     if (FAILED(hr)) return hr;
-    const GUID guids[] = {GUID_COMPARTMENT_KEYBOARD_DISABLED,
-                          GUID_COMPARTMENT_EMPTYCONTEXT,
-                          GUID_COMPARTMENT_KEYBOARD_OPENCLOSE,
+    // Open/close and conversion are thread-manager compartments. Disabled
+    // and empty-context state belongs to the focused ITfContext, matching
+    // WeaselTSF and hosts such as Windows Search.
+    const GUID guids[] = {GUID_COMPARTMENT_KEYBOARD_OPENCLOSE,
                           GUID_COMPARTMENT_KEYBOARD_INPUTMODE_CONVERSION};
     for (const GUID& guid : guids) {
         ITfCompartment* compartment = nullptr;
@@ -1449,7 +1510,10 @@ HRESULT HeshunTextService::InitCompartmentSinks() {
             compartment->Release();
             if (SUCCEEDED(hr)) compartment_sinks_.push_back(std::move(sink));
         }
-        if (FAILED(hr)) break;
+        if (FAILED(hr)) {
+            Trace("Compartment: optional thread compartment unavailable " + Hr(hr));
+            hr = S_OK;
+        }
     }
     manager->Release();
     if (FAILED(hr)) UninitCompartmentSinks();
@@ -1462,15 +1526,7 @@ void HeshunTextService::UninitCompartmentSinks() {
 
 void HeshunTextService::OnCompartmentChanged(REFGUID guid) {
     DWORD value = 0;
-    if (guid == GUID_COMPARTMENT_KEYBOARD_DISABLED && ReadCompartmentDWORD(guid, &value)) {
-        keyboard_disabled_ = value != 0;
-        if (keyboard_disabled_) ClearActiveContext("KeyboardDisabled");
-        SetLanguageBarDisabled(keyboard_disabled_ || empty_context_);
-    } else if (guid == GUID_COMPARTMENT_EMPTYCONTEXT && ReadCompartmentDWORD(guid, &value)) {
-        empty_context_ = value != 0;
-        if (empty_context_) ClearActiveContext("EmptyContext");
-        SetLanguageBarDisabled(keyboard_disabled_ || empty_context_);
-    } else if (guid == GUID_COMPARTMENT_KEYBOARD_OPENCLOSE && ReadCompartmentDWORD(guid, &value)) {
+    if (guid == GUID_COMPARTMENT_KEYBOARD_OPENCLOSE && ReadCompartmentDWORD(guid, &value)) {
         keyboard_open_ = value != 0;
         if (!keyboard_open_) ClearActiveContext("KeyboardClosed");
         ShowLanguageBar(keyboard_open_);
@@ -1701,7 +1757,17 @@ void HeshunTextService::SelectInputModeFromLangBar(unsigned int mode) {
 }
 
 bool HeshunTextService::IsHandledKey(WPARAM key) const {
-    if (keyboard_disabled_ || empty_context_ || !keyboard_open_) return false;
+    const bool context_disabled = ContextInputDisabled();
+    if (keyboard_disabled_ || !keyboard_open_ || context_disabled) {
+        std::ostringstream out;
+        out << "InputGate: rejected key=" << key
+            << " keyboard_disabled=" << (keyboard_disabled_ ? 1 : 0)
+            << " keyboard_open=" << (keyboard_open_ ? 1 : 0)
+            << " context_disabled=" << (context_disabled ? 1 : 0)
+            << " ascii=" << (ascii_mode_ ? 1 : 0);
+        Trace(out.str());
+        return false;
+    }
     const HeshunKeyState state = CaptureHeshunKeyState(0);
     if (key == VK_SHIFT) return true;
     if (key == VK_OEM_3 && state.Control() && !state.Alt() && !state.Windows()) return true;

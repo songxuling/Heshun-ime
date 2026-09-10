@@ -26,3 +26,7 @@ inline constexpr GUID GUID_DISPLAYATTRIBUTE_HESHUN_PREEDIT =
 
 inline constexpr wchar_t kHeshunServiceName[] = L"heshun";
 inline constexpr LANGID kHeshunLangId = MAKELANGID(LANG_CHINESE, SUBLANG_CHINESE_SIMPLIFIED);
+inline constexpr LANGID kHeshunLangIdTraditional = MAKELANGID(LANG_CHINESE, SUBLANG_CHINESE_TRADITIONAL);
+inline constexpr LANGID kHeshunLangIdHongKong = MAKELANGID(LANG_CHINESE, SUBLANG_CHINESE_HONGKONG);
+inline constexpr LANGID kHeshunLangIdMacau = MAKELANGID(LANG_CHINESE, SUBLANG_CHINESE_MACAU);
+inline constexpr LANGID kHeshunLangIdSingapore = MAKELANGID(LANG_CHINESE, SUBLANG_CHINESE_SINGAPORE);

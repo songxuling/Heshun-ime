@@ -1,6 +1,7 @@
 //! 词图与 beam search 组句，参考 librime 的 Poet::WordGraph。
 
 use crate::pinyin::PinyinDict;
+use crate::projection::SpellingProjection;
 use crate::scorer::{BasicScorer, CandidateScorer};
 use crate::segmentation::SyllableGraph;
 use crate::user_dict::UserDict;
@@ -26,7 +27,16 @@ pub struct RankedSentence {
 const SENTENCE_CUTOFF: f64 = 64.0;
 
 pub fn build_word_graph(input: &str, dict: &PinyinDict, per_code_limit: usize) -> Vec<WordEdge> {
-    let graph = SyllableGraph::build(input, dict);
+    build_word_graph_with_projection(input, dict, SpellingProjection::FullPinyin, per_code_limit)
+}
+
+pub fn build_word_graph_with_projection(
+    input: &str,
+    dict: &PinyinDict,
+    projection: SpellingProjection<'_>,
+    per_code_limit: usize,
+) -> Vec<WordEdge> {
+    let graph = SyllableGraph::build_with_projection(input, dict, projection, false);
     let mut edges = Vec::new();
     for edge in graph.edges {
         for candidate in dict.exact_limited(&edge.code, per_code_limit) {
@@ -48,9 +58,25 @@ pub fn build_word_graph_with_user(
     user_dict: Option<&UserDict>,
     per_code_limit: usize,
 ) -> Vec<WordEdge> {
-    let mut edges = build_word_graph(input, dict, per_code_limit);
+    build_word_graph_with_user_projection(
+        input,
+        dict,
+        SpellingProjection::FullPinyin,
+        user_dict,
+        per_code_limit,
+    )
+}
+
+pub fn build_word_graph_with_user_projection(
+    input: &str,
+    dict: &PinyinDict,
+    projection: SpellingProjection<'_>,
+    user_dict: Option<&UserDict>,
+    per_code_limit: usize,
+) -> Vec<WordEdge> {
+    let mut edges = build_word_graph_with_projection(input, dict, projection, per_code_limit);
     let Some(user_dict) = user_dict else { return edges; };
-    let graph = SyllableGraph::build(input, dict);
+    let graph = SyllableGraph::build_with_projection(input, dict, projection, false);
     for edge in graph.edges {
         for (word, count) in user_dict
             .composition_words(&edge.code)
@@ -103,12 +129,47 @@ pub fn beam_search_with_user_context(
     beam_width: usize,
     scorer: &impl CandidateScorer,
 ) -> Vec<RankedSentence> {
-    let input = crate::pinyin::normalize_pinyin(input);
-    if input.is_empty() || max_sentences == 0 {
+    beam_search_with_user_context_projection(
+        input,
+        dict,
+        SpellingProjection::FullPinyin,
+        user_dict,
+        preceding_word,
+        max_sentences,
+        beam_width,
+        scorer,
+    )
+}
+
+pub fn beam_search_with_user_context_projection(
+    input: &str,
+    dict: &PinyinDict,
+    projection: SpellingProjection<'_>,
+    user_dict: Option<&UserDict>,
+    preceding_word: Option<&str>,
+    max_sentences: usize,
+    beam_width: usize,
+    scorer: &impl CandidateScorer,
+) -> Vec<RankedSentence> {
+    let projected_input = projection.lookup(input);
+    if projected_input.is_empty() || max_sentences == 0 {
         return Vec::new();
     }
-    let edges = build_word_graph_with_user(&input, dict, user_dict, beam_width.max(1));
-    beam_from_edges_with_context(&input, edges, preceding_word, max_sentences, beam_width, scorer)
+    let edges = build_word_graph_with_user_projection(
+        input,
+        dict,
+        projection,
+        user_dict,
+        beam_width.max(1),
+    );
+    beam_from_edges_with_context(
+        &projected_input,
+        edges,
+        preceding_word,
+        max_sentences,
+        beam_width,
+        scorer,
+    )
 }
 
 fn beam_from_edges(
@@ -191,6 +252,32 @@ mod tests {
         let result = default_beam_search("zhongguo", &dict, 3);
         assert!(result.iter().any(|s| s.words == vec!["中国"]));
         assert!(result.iter().any(|s| s.words == vec!["中", "国"]));
+    }
+
+    #[test]
+    fn double_pinyin_uses_the_same_word_graph_projection() {
+        let mut dict = PinyinDict::from_entries(vec![
+            ("zhong".into(), "中".into(), 100),
+            ("guo".into(), "国".into(), 90),
+            ("zhong guo".into(), "中国".into(), 500),
+        ]);
+        let algebra = crate::algebra::Algebra::natural_code();
+        dict = dict.with_zrm(crate::zrm::ZrmMap::build(
+            &["zhong".into(), "guo".into()],
+            &algebra,
+        ));
+        let projection = SpellingProjection::from_dict(&dict);
+        let result = beam_search_with_user_context_projection(
+            "vsgo",
+            &dict,
+            projection,
+            None,
+            None,
+            3,
+            9,
+            &BasicScorer::default(),
+        );
+        assert!(result.iter().any(|sentence| sentence.words == vec!["中国"]));
     }
 
     #[test]

@@ -4,7 +4,8 @@
 //! 图中的位置是归一化后的 ASCII 拼音字符位置；delimiter 只用于阻止
 //! 跨边界连接，不会被当成拼音编码的一部分。
 
-use crate::pinyin::{normalize_pinyin, PinyinDict};
+use crate::pinyin::PinyinDict;
+use crate::projection::SpellingProjection;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SpellingType {
@@ -41,28 +42,32 @@ pub struct SyllableGraph {
 
 impl SyllableGraph {
     pub fn build(input: &str, dict: &PinyinDict) -> Self {
-        Self::build_with_options(input, dict, false)
+        Self::build_with_projection(input, dict, SpellingProjection::FullPinyin, false)
     }
 
     pub fn build_with_options(input: &str, dict: &PinyinDict, enable_abbreviation: bool) -> Self {
-        let normalized = normalize_pinyin(input);
+        Self::build_with_projection(
+            input,
+            dict,
+            SpellingProjection::FullPinyin,
+            enable_abbreviation,
+        )
+    }
+
+    /// Build the same syllable graph after applying an input spelling
+    /// projection.  Full pinyin and every double-pinyin layout therefore
+    /// share the graph, completion, delimiter, and reachability algorithms.
+    pub fn build_with_projection(
+        input: &str,
+        dict: &PinyinDict,
+        projection: SpellingProjection<'_>,
+        enable_abbreviation: bool,
+    ) -> Self {
+        let projected = projection.project(input);
+        let normalized = projected.input;
         let n = normalized.len();
-        let mut original_ranges = Vec::new();
-        let mut delimiter_boundaries = Vec::new();
-        let mut normalized_pos = 0usize;
-        let mut previous_was_delimiter = false;
-        for (original_pos, ch) in input.char_indices() {
-            if ch == ' ' || ch == '\'' {
-                previous_was_delimiter = normalized_pos > 0;
-            } else {
-                if previous_was_delimiter {
-                    delimiter_boundaries.push(normalized_pos);
-                }
-                previous_was_delimiter = false;
-                normalized_pos += ch.len_utf8();
-                original_ranges.push((original_pos, original_pos + ch.len_utf8()));
-            }
-        }
+        let original_ranges = projected.original_ranges;
+        let delimiter_boundaries = projected.delimiter_boundaries;
         let mut edges = Vec::new();
         let mut farthest = 0;
 
@@ -254,5 +259,21 @@ mod tests {
             edge.start == 6 && edge.end == 10 && edge.code == "zhong"
                 && edge.properties.spelling_type == SpellingType::Completion
         }));
+    }
+
+    #[test]
+    fn double_pinyin_graph_keeps_raw_key_ranges() {
+        let mut dict = dict();
+        let algebra = crate::algebra::Algebra::natural_code();
+        dict = dict.with_zrm(crate::zrm::ZrmMap::build(
+            &["zhong".into(), "guo".into()],
+            &algebra,
+        ));
+        let projection = SpellingProjection::from_dict(&dict);
+        let graph = SyllableGraph::build_with_projection("vsgo", &dict, projection, false);
+        let zhong = graph.edges.iter().find(|edge| edge.code == "zhong").unwrap();
+        let guo = graph.edges.iter().find(|edge| edge.code == "guo").unwrap();
+        assert_eq!((zhong.properties.original_start, zhong.properties.original_end), (0, 2));
+        assert_eq!((guo.properties.original_start, guo.properties.original_end), (2, 4));
     }
 }
